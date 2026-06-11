@@ -23,9 +23,7 @@ public class CorsConfig {
 
        
         List<String> origins = new ArrayList<>(List.of(
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "http://localhost:4173"
+            "https://resitrack-seven.vercel.app"
         ));
 
         
