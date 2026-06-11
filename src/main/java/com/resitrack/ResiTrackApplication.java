@@ -11,11 +11,6 @@ import io.github.cdimascio.dotenv.Dotenv;
 @EnableScheduling
 public class ResiTrackApplication {
     public static void main(String[] args) {
-
-        Dotenv.configure()
-            .directory("./")
-            .filename(".env")
-            .load();
    
             SpringApplication.run(ResiTrackApplication.class, args);
     }
