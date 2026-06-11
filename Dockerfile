@@ -13,6 +13,7 @@ WORKDIR /app
 
 COPY --from=build /app/target/resitrack-backend-1.0.0.jar app.jar
 
-EXPOSE 8080
+# PORT is injected dynamically by Render at runtime — do not hardcode 8080
+EXPOSE $PORT
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["sh", "-c", "java -jar app.jar --server.port=${PORT:-8080}"]
