@@ -27,7 +27,7 @@ public class AuthService {
 
     private final AdminRepository         adminRepo;
     private final ResidentRepository      residentRepo;
-    private final SecurityGuardRepository securityGuardRepo;
+    private final SecurityGuardRepository securityGuardRepo;   // NEW — injected for unified login
     private final PasswordEncoder         passwordEncoder;
     private final JwtTokenProvider        jwtTokenProvider;
     private final NotificationService     notificationService;
@@ -35,7 +35,54 @@ public class AuthService {
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("dd-MMM-yyyy hh:mm a");
 
-    // ── Admin Login (unchanged) ───────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // NEW — Unified login
+    // Tries Admin → Security → Resident in order.
+    // Returns the same JwtResponse shape used by the individual endpoints.
+    // ══════════════════════════════════════════════════════════════════════
+    public JwtResponse unifiedLogin(LoginRequest req) {
+        String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
+        String password   = req.getPassword();
+
+        // 1. Admin check (email or phone)
+        Admin admin = adminRepo.findByEmail(identifier)
+                .or(() -> adminRepo.findByPhone(identifier))
+                .orElse(null);
+        if (admin != null) {
+            if (!passwordEncoder.matches(password, admin.getPassword()))
+                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+            return buildAdminResponse(admin);
+        }
+
+        // 2. Security guard check (email or phone)
+        SecurityGuard guard = securityGuardRepo.findByEmail(identifier)
+                .or(() -> securityGuardRepo.findByPhone(identifier))
+                .orElse(null);
+        if (guard != null) {
+            if (!passwordEncoder.matches(password, guard.getPassword()))
+                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+            if (!guard.isActive())
+                throw new CustomException(
+                        "INACTIVE:Your security account has been deactivated. Contact the admin.",
+                        HttpStatus.FORBIDDEN);
+            return buildSecurityResponse(guard);
+        }
+
+        // 3. Resident / Family Member check (email or phone)
+        Resident r = residentRepo.findByEmail(identifier)
+                .or(() -> residentRepo.findByPhone(identifier))
+                .orElse(null);
+        if (r != null) {
+            if (!passwordEncoder.matches(password, r.getPassword()))
+                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+            return buildResidentResponse(r);
+        }
+
+        // Nothing matched
+        throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+    }
+
+    // ── Admin Login (unchanged — kept for backward compat) ────────────────
     public JwtResponse adminLogin(LoginRequest req) {
         String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
 
@@ -46,28 +93,13 @@ public class AuthService {
         if (!passwordEncoder.matches(req.getPassword(), admin.getPassword()))
             throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
 
-        String token = jwtTokenProvider.generateTokenFromUsername(admin.getEmail());
-
-        boolean superAdminFlag = false;
-        try { superAdminFlag = admin.isSuperAdmin(); } catch (Exception ignored) {}
-
-        return JwtResponse.builder()
-                .token(token)
-                .user(JwtResponse.UserInfo.builder()
-                        .id(admin.getId())
-                        .name(admin.getName())
-                        .email(admin.getEmail())
-                        .role("ADMIN")
-                        .superAdmin(superAdminFlag)
-                        .build())
-                .build();
+        return buildAdminResponse(admin);
     }
 
-    // ── Security Guard Login (NEW) ────────────────────────────────────────
+    // ── Security Guard Login (added alongside security module) ────────────
     public JwtResponse securityLogin(LoginRequest req) {
         String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
 
-        // Support login by email OR phone number
         SecurityGuard guard = securityGuardRepo.findByEmail(identifier)
                 .or(() -> securityGuardRepo.findByPhone(identifier))
                 .orElseThrow(() -> new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED));
@@ -80,20 +112,10 @@ public class AuthService {
                     "INACTIVE:Your security account has been deactivated. Contact the admin.",
                     HttpStatus.FORBIDDEN);
 
-        String token = jwtTokenProvider.generateTokenFromUsername(guard.getEmail());
-
-        return JwtResponse.builder()
-                .token(token)
-                .user(JwtResponse.UserInfo.builder()
-                        .id(guard.getId())
-                        .name(guard.getName())
-                        .email(guard.getEmail())
-                        .role("SECURITY")
-                        .build())
-                .build();
+        return buildSecurityResponse(guard);
     }
 
-    // ── Resident / Family Member Login (unchanged) ────────────────────────
+    // ── Resident / Family Member Login (unchanged — kept for backward compat)
     public JwtResponse userLogin(LoginRequest req) {
         String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
 
@@ -104,58 +126,7 @@ public class AuthService {
         if (!passwordEncoder.matches(req.getPassword(), r.getPassword()))
             throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
 
-        boolean isFamilyMember = false;
-        try {
-            isFamilyMember = r.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER;
-        } catch (Exception ignored) {}
-
-        if (!isFamilyMember) {
-            if (r.getRegistrationStatus() == RegistrationStatus.PENDING) {
-                String date = r.getCreatedAt() != null
-                        ? r.getCreatedAt().format(DATE_FMT) : "recently";
-                throw new CustomException(
-                        "PENDING:Your registration is pending admin approval. Submitted on " + date + ".",
-                        HttpStatus.FORBIDDEN);
-            }
-            if (r.getRegistrationStatus() == RegistrationStatus.REJECTED) {
-                String reason = r.getRejectedReason() != null
-                        ? r.getRejectedReason() : "No reason provided";
-                throw new CustomException("REJECTED:" + reason, HttpStatus.FORBIDDEN);
-            }
-        }
-
-        if (!r.isActive()) {
-            throw new CustomException(
-                    "INACTIVE:Your account has been deactivated. Please contact the admin.",
-                    HttpStatus.FORBIDDEN);
-        }
-
-        String token = jwtTokenProvider.generateTokenFromUsername(r.getEmail());
-
-        JwtResponse.UserInfo.UserInfoBuilder builder = JwtResponse.UserInfo.builder()
-                .id(r.getId())
-                .name(r.getFullName())
-                .email(r.getEmail())
-                .role("USER")
-                .flatNumber(r.getFlatNumber())
-                .flatType(r.getFlatType())
-                .propertyType(r.getPropertyType() != null ? r.getPropertyType().name() : null)
-                .registerNumber(r.getRegisterNumber())
-                .registrationStatus(r.getRegistrationStatus() != null
-                        ? r.getRegistrationStatus().name() : null);
-
-        try {
-            String role = r.getResidentRole().name();
-            builder.residentRole(role);
-            if (r.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER) {
-                builder.ownerResidentId(r.getOwnerResidentId());
-                builder.familyMemberId(r.getFamilyMemberId());
-            }
-        } catch (Exception ignored) {
-            builder.residentRole("OWNER");
-        }
-
-        return JwtResponse.builder().token(token).user(builder.build()).build();
+        return buildResidentResponse(r);
     }
 
     // ── Self Registration (unchanged) ─────────────────────────────────────
@@ -253,7 +224,7 @@ public class AuthService {
         residentRepo.save(r);
     }
 
-    // ── Security change password (NEW) ────────────────────────────────────
+    // ── Security change password (security module) ────────────────────────
     public void changeSecurityPassword(String guardEmail, ChangePasswordRequest req) {
         SecurityGuard guard = securityGuardRepo.findByEmail(guardEmail)
                 .orElseThrow(() -> new CustomException(
@@ -267,6 +238,86 @@ public class AuthService {
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
+
+    private JwtResponse buildAdminResponse(Admin admin) {
+        String token = jwtTokenProvider.generateTokenFromUsername(admin.getEmail());
+        boolean superAdminFlag = false;
+        try { superAdminFlag = admin.isSuperAdmin(); } catch (Exception ignored) {}
+        return JwtResponse.builder()
+                .token(token)
+                .user(JwtResponse.UserInfo.builder()
+                        .id(admin.getId())
+                        .name(admin.getName())
+                        .email(admin.getEmail())
+                        .role("ADMIN")
+                        .superAdmin(superAdminFlag)
+                        .build())
+                .build();
+    }
+
+    private JwtResponse buildSecurityResponse(SecurityGuard guard) {
+        String token = jwtTokenProvider.generateTokenFromUsername(guard.getEmail());
+        return JwtResponse.builder()
+                .token(token)
+                .user(JwtResponse.UserInfo.builder()
+                        .id(guard.getId())
+                        .name(guard.getName())
+                        .email(guard.getEmail())
+                        .role("SECURITY")
+                        .build())
+                .build();
+    }
+
+    private JwtResponse buildResidentResponse(Resident r) {
+        boolean isFamilyMember = false;
+        try { isFamilyMember = r.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER; }
+        catch (Exception ignored) {}
+
+        if (!isFamilyMember) {
+            if (r.getRegistrationStatus() == RegistrationStatus.PENDING) {
+                String date = r.getCreatedAt() != null ? r.getCreatedAt().format(DATE_FMT) : "recently";
+                throw new CustomException(
+                        "PENDING:Your registration is pending admin approval. Submitted on " + date + ".",
+                        HttpStatus.FORBIDDEN);
+            }
+            if (r.getRegistrationStatus() == RegistrationStatus.REJECTED) {
+                String reason = r.getRejectedReason() != null ? r.getRejectedReason() : "No reason provided";
+                throw new CustomException("REJECTED:" + reason, HttpStatus.FORBIDDEN);
+            }
+        }
+
+        if (!r.isActive())
+            throw new CustomException(
+                    "INACTIVE:Your account has been deactivated. Please contact the admin.",
+                    HttpStatus.FORBIDDEN);
+
+        String token = jwtTokenProvider.generateTokenFromUsername(r.getEmail());
+
+        JwtResponse.UserInfo.UserInfoBuilder builder = JwtResponse.UserInfo.builder()
+                .id(r.getId())
+                .name(r.getFullName())
+                .email(r.getEmail())
+                .role("USER")
+                .flatNumber(r.getFlatNumber())
+                .flatType(r.getFlatType())
+                .propertyType(r.getPropertyType() != null ? r.getPropertyType().name() : null)
+                .registerNumber(r.getRegisterNumber())
+                .registrationStatus(r.getRegistrationStatus() != null
+                        ? r.getRegistrationStatus().name() : null);
+
+        try {
+            builder.residentRole(r.getResidentRole().name());
+            if (r.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER) {
+                builder.ownerResidentId(r.getOwnerResidentId());
+                builder.familyMemberId(r.getFamilyMemberId());
+            }
+        } catch (Exception ignored) {
+            builder.residentRole("OWNER");
+        }
+
+        return JwtResponse.builder().token(token).user(builder.build()).build();
+    }
+
     private void notifyAllAdmins(Resident r) {
         List<Admin> admins = adminRepo.findAll();
         for (Admin admin : admins) {

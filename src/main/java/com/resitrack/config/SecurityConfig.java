@@ -52,11 +52,12 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // Public auth endpoints (unchanged + security login added)
+                // Public auth endpoints
                 .requestMatchers(
-                    "/auth/admin/login",
-                    "/auth/user/login",
-                    "/auth/security/login",
+                    "/auth/login",                          // NEW unified login
+                    "/auth/admin/login",                    // kept for compat
+                    "/auth/user/login",                     // kept for compat
+                    "/auth/security/login",                 // kept for compat
                     "/auth/register",
                     "/auth/validate-register-number/**",
                     "/auth/registration-status/**"
@@ -70,16 +71,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT,    "/members/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/members/**").hasRole("ADMIN")
 
-                // Admin endpoints (unchanged)
+                // Role-specific dashboard endpoints (unchanged)
                 .requestMatchers("/admin/**").hasRole("ADMIN")
-
-                // User endpoints (unchanged)
                 .requestMatchers("/user/**").hasRole("USER")
-
-                // Security guard endpoints (NEW)
                 .requestMatchers("/security/**").hasRole("SECURITY")
 
-                // Password change endpoints
+                // Password change endpoints (unchanged)
                 .requestMatchers("/auth/admin/change-password").hasRole("ADMIN")
                 .requestMatchers("/auth/user/change-password").hasRole("USER")
                 .requestMatchers("/auth/security/change-password").hasRole("SECURITY")
