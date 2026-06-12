@@ -63,6 +63,7 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     long countUnreadForAdminId(
             @Param("adminId")      Long    adminId,
             @Param("isSuperAdmin") boolean isSuperAdmin);
+
     List<Notification> findByTargetResidentIdOrderByCreatedAtDesc(Long targetResidentId);
 
     List<Notification> findByTargetResidentIdIsNullOrderByCreatedAtDesc();
@@ -86,4 +87,18 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
             @Param("type") Notification.NotificationType type,
             @Param("titlePart") String titlePart,
             @Param("date") LocalDate date);
+
+    // ── Security guard queries (NEW) ──────────────────────────────────────
+
+    @Query("SELECT n FROM Notification n " +
+           "WHERE n.recipientRole = 'SECURITY' " +
+           "AND n.targetAdminId = :guardId " +
+           "ORDER BY n.createdAt DESC")
+    List<Notification> findSecurityNotificationsForGuard(@Param("guardId") Long guardId);
+
+    @Query("SELECT COUNT(n) FROM Notification n " +
+           "WHERE n.recipientRole = 'SECURITY' " +
+           "AND n.targetAdminId = :guardId " +
+           "AND n.isRead = false")
+    long countUnreadSecurityNotifications(@Param("guardId") Long guardId);
 }

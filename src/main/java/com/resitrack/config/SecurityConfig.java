@@ -52,9 +52,11 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
+                // Public auth endpoints (unchanged + security login added)
                 .requestMatchers(
                     "/auth/admin/login",
                     "/auth/user/login",
+                    "/auth/security/login",
                     "/auth/register",
                     "/auth/validate-register-number/**",
                     "/auth/registration-status/**"
@@ -62,15 +64,25 @@ public class SecurityConfig {
 
                 .requestMatchers("/uploads/**").permitAll()
 
+                // Member endpoints (unchanged)
                 .requestMatchers(HttpMethod.GET, "/members", "/members/**").authenticated()
                 .requestMatchers(HttpMethod.POST,   "/members", "/members/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT,    "/members/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/members/**").hasRole("ADMIN")
 
+                // Admin endpoints (unchanged)
                 .requestMatchers("/admin/**").hasRole("ADMIN")
+
+                // User endpoints (unchanged)
                 .requestMatchers("/user/**").hasRole("USER")
+
+                // Security guard endpoints (NEW)
+                .requestMatchers("/security/**").hasRole("SECURITY")
+
+                // Password change endpoints
                 .requestMatchers("/auth/admin/change-password").hasRole("ADMIN")
                 .requestMatchers("/auth/user/change-password").hasRole("USER")
+                .requestMatchers("/auth/security/change-password").hasRole("SECURITY")
 
                 .anyRequest().authenticated()
             )

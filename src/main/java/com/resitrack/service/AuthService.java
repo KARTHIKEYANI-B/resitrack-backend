@@ -4,9 +4,11 @@ import com.resitrack.dto.*;
 import com.resitrack.entity.Admin;
 import com.resitrack.entity.Resident;
 import com.resitrack.entity.Resident.RegistrationStatus;
+import com.resitrack.entity.SecurityGuard;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.repository.SecurityGuardRepository;
 import com.resitrack.security.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,28 +25,20 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AuthService {
 
-    private final AdminRepository     adminRepo;
-    private final ResidentRepository  residentRepo;
-    private final PasswordEncoder     passwordEncoder;
-    private final JwtTokenProvider    jwtTokenProvider;
-    private final NotificationService notificationService;
+    private final AdminRepository         adminRepo;
+    private final ResidentRepository      residentRepo;
+    private final SecurityGuardRepository securityGuardRepo;
+    private final PasswordEncoder         passwordEncoder;
+    private final JwtTokenProvider        jwtTokenProvider;
+    private final NotificationService     notificationService;
 
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("dd-MMM-yyyy hh:mm a");
 
-    // ── Admin Login ───────────────────────────────────────────────────────
-    //
-    // Supports two login identifiers:
-    //   1. Email address   — admin@resitrack.com
-    //   2. Mobile number   — 10-digit phone stored on the Admin account
-    //
-    // The JWT is always issued against admin.getEmail() (unchanged).
-    // UserDetailsServiceImpl continues to load by email on every request.
+    // ── Admin Login (unchanged) ───────────────────────────────────────────
     public JwtResponse adminLogin(LoginRequest req) {
-        // Normalise: trim whitespace; treat as email if it contains '@'
         String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
 
-        // Try email first; if not found try phone (mobile-number login)
         Admin admin = adminRepo.findByEmail(identifier)
                 .or(() -> adminRepo.findByPhone(identifier))
                 .orElseThrow(() -> new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED));
@@ -54,7 +48,6 @@ public class AuthService {
 
         String token = jwtTokenProvider.generateTokenFromUsername(admin.getEmail());
 
-        // Safely read isSuperAdmin — defaults to false if column not yet migrated
         boolean superAdminFlag = false;
         try { superAdminFlag = admin.isSuperAdmin(); } catch (Exception ignored) {}
 
@@ -70,20 +63,40 @@ public class AuthService {
                 .build();
     }
 
-    // ── Resident / Family Member Login ────────────────────────────────────
-    //
-    // Supports two login identifiers:
-    //   1. Email address   — owner@gmail.com  /  fm.login@resitrack.internal
-    //   2. Mobile number   — 10-digit phone stored on the Resident row
-    //
-    // Covers: OWNER, FAMILY_MEMBER.
-    // The JWT is always issued against r.getEmail() (unchanged).
-    // UserDetailsServiceImpl continues to load by email on every request.
-    public JwtResponse userLogin(LoginRequest req) {
-        // Normalise: trim whitespace
+    // ── Security Guard Login (NEW) ────────────────────────────────────────
+    public JwtResponse securityLogin(LoginRequest req) {
         String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
 
-        // Try email first; if not found try phone (mobile-number login)
+        // Support login by email OR phone number
+        SecurityGuard guard = securityGuardRepo.findByEmail(identifier)
+                .or(() -> securityGuardRepo.findByPhone(identifier))
+                .orElseThrow(() -> new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED));
+
+        if (!passwordEncoder.matches(req.getPassword(), guard.getPassword()))
+            throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+
+        if (!guard.isActive())
+            throw new CustomException(
+                    "INACTIVE:Your security account has been deactivated. Contact the admin.",
+                    HttpStatus.FORBIDDEN);
+
+        String token = jwtTokenProvider.generateTokenFromUsername(guard.getEmail());
+
+        return JwtResponse.builder()
+                .token(token)
+                .user(JwtResponse.UserInfo.builder()
+                        .id(guard.getId())
+                        .name(guard.getName())
+                        .email(guard.getEmail())
+                        .role("SECURITY")
+                        .build())
+                .build();
+    }
+
+    // ── Resident / Family Member Login (unchanged) ────────────────────────
+    public JwtResponse userLogin(LoginRequest req) {
+        String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
+
         Resident r = residentRepo.findByEmail(identifier)
                 .or(() -> residentRepo.findByPhone(identifier))
                 .orElseThrow(() -> new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED));
@@ -91,7 +104,6 @@ public class AuthService {
         if (!passwordEncoder.matches(req.getPassword(), r.getPassword()))
             throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
 
-        // FAMILY_MEMBER accounts skip PENDING/REJECTED checks (auto-approved at creation)
         boolean isFamilyMember = false;
         try {
             isFamilyMember = r.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER;
@@ -132,7 +144,6 @@ public class AuthService {
                 .registrationStatus(r.getRegistrationStatus() != null
                         ? r.getRegistrationStatus().name() : null);
 
-        // Safe residentRole read (field may not exist if entity not updated)
         try {
             String role = r.getResidentRole().name();
             builder.residentRole(role);
@@ -147,7 +158,7 @@ public class AuthService {
         return JwtResponse.builder().token(token).user(builder.build()).build();
     }
 
-    // ── Self Registration ─────────────────────────────────────────────────
+    // ── Self Registration (unchanged) ─────────────────────────────────────
     @Transactional
     public Resident register(RegisterRequest req) {
 
@@ -182,17 +193,14 @@ public class AuthService {
                 .registered(false)
                 .status(Resident.ResidentStatus.INACTIVE);
 
-        // Safe: set residentRole only if the field exists on the entity
-        try {
-            builder.residentRole(Resident.ResidentRole.OWNER);
-        } catch (Exception ignored) {}
+        try { builder.residentRole(Resident.ResidentRole.OWNER); } catch (Exception ignored) {}
 
         Resident saved = residentRepo.save(builder.build());
         notifyAllAdmins(saved);
         return saved;
     }
 
-    // ── Registration status check ─────────────────────────────────────────
+    // ── Registration status check (unchanged) ─────────────────────────────
     public RegistrationStatusDTO getRegistrationStatus(String email) {
         Resident r = residentRepo.findByEmail(email)
                 .orElseThrow(() -> new CustomException(
@@ -212,7 +220,7 @@ public class AuthService {
                 .build();
     }
 
-    // ── Register number validation ─────────────────────────────────────────
+    // ── Register number validation (unchanged) ─────────────────────────────
     public void validateRegisterNumber(String regNo) {
         Resident r = residentRepo.findByRegisterNumber(regNo)
                 .orElseThrow(() -> new CustomException(
@@ -221,7 +229,7 @@ public class AuthService {
             throw new CustomException("Register number already used.", HttpStatus.CONFLICT);
     }
 
-    // ── Admin change password ─────────────────────────────────────────────
+    // ── Admin change password (unchanged) ─────────────────────────────────
     public void changeAdminPassword(String adminEmail, ChangePasswordRequest req) {
         Admin admin = adminRepo.findByEmail(adminEmail)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
@@ -233,7 +241,7 @@ public class AuthService {
         adminRepo.save(admin);
     }
 
-    // ── Resident change password ──────────────────────────────────────────
+    // ── Resident change password (unchanged) ──────────────────────────────
     public void changeResidentPassword(Long residentId, ChangePasswordRequest req) {
         Resident r = residentRepo.findById(residentId)
                 .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
@@ -243,6 +251,19 @@ public class AuthService {
             throw new CustomException("New password must be at least 8 characters", HttpStatus.BAD_REQUEST);
         r.setPassword(passwordEncoder.encode(req.getNewPassword()));
         residentRepo.save(r);
+    }
+
+    // ── Security change password (NEW) ────────────────────────────────────
+    public void changeSecurityPassword(String guardEmail, ChangePasswordRequest req) {
+        SecurityGuard guard = securityGuardRepo.findByEmail(guardEmail)
+                .orElseThrow(() -> new CustomException(
+                        "Security account not found", HttpStatus.NOT_FOUND));
+        if (!passwordEncoder.matches(req.getCurrentPassword(), guard.getPassword()))
+            throw new CustomException("Current password is incorrect", HttpStatus.BAD_REQUEST);
+        if (req.getNewPassword() == null || req.getNewPassword().trim().length() < 6)
+            throw new CustomException("New password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        guard.setPassword(passwordEncoder.encode(req.getNewPassword()));
+        securityGuardRepo.save(guard);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
