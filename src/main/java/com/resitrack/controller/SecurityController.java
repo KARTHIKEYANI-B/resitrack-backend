@@ -31,24 +31,27 @@ public class SecurityController {
     private final NotificationRepository  notifRepo;
 
     // ══════════════════════════════════════════════════════════════════════
-    // ADMIN endpoints  (Super Admin only)
+    // ADMIN → VIEW endpoints  (all Admin roles can read)
     // ══════════════════════════════════════════════════════════════════════
 
+    /** All admins can list security accounts (read-only view). */
     @GetMapping("/admin/security")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<List<SecurityGuardDTO.Response>>> listGuards(
-            Authentication auth) {
-        requireSuperAdmin(auth);
+    public ResponseEntity<ApiResponse<List<SecurityGuardDTO.Response>>> listGuards() {
         return ResponseEntity.ok(ApiResponse.success(securityService.getAll()));
     }
 
+    /** All admins can fetch a single security account (read-only view). */
     @GetMapping("/admin/security/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<SecurityGuardDTO.Response>> getGuard(
-            @PathVariable Long id, Authentication auth) {
-        requireSuperAdmin(auth);
+            @PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(securityService.getById(id)));
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ADMIN → MANAGE endpoints  (Super Admin / President only)
+    // ══════════════════════════════════════════════════════════════════════
 
     @PostMapping("/admin/security")
     @PreAuthorize("hasRole('ADMIN')")
@@ -83,13 +86,15 @@ public class SecurityController {
         return ResponseEntity.ok(ApiResponse.success("Security account deleted", null));
     }
 
-    /** Admin sends a message to a specific security guard */
+    /** Send a message to a security guard — Super Admin / President only. */
     @PostMapping("/admin/security/{guardId}/message")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Notification>> sendMessageToGuard(
             @PathVariable Long guardId,
             @RequestBody Map<String, String> body,
             Authentication auth) {
+
+        requireSuperAdmin(auth);
 
         SecurityGuard guard = guardRepo.findById(guardId)
                 .orElseThrow(() -> new CustomException(
@@ -152,7 +157,7 @@ public class SecurityController {
         return ResponseEntity.ok(ApiResponse.success("Marked read", notifRepo.save(n)));
     }
 
-    /** Security guard sends a message to Admin */
+    /** Security guard sends a message to Admin. */
     @PostMapping("/security/messages")
     @PreAuthorize("hasRole('SECURITY')")
     public ResponseEntity<ApiResponse<Notification>> sendMessageToAdmin(
@@ -178,6 +183,11 @@ public class SecurityController {
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    /**
+     * Enforces Super Admin / President access.
+     * President accounts have superAdmin=true in the DB (set by AdminAssignmentService.appoint),
+     * so isSuperAdmin() returns true for both the system Super Admin and the appointed President.
+     */
     private void requireSuperAdmin(Authentication auth) {
         Admin admin = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
@@ -185,7 +195,8 @@ public class SecurityController {
         try { isSa = admin.isSuperAdmin(); } catch (Exception ignored) {}
         if (!isSa)
             throw new CustomException(
-                    "Only Super Admin can manage security accounts", HttpStatus.FORBIDDEN);
+                    "Only Super Admin / President can manage security accounts",
+                    HttpStatus.FORBIDDEN);
     }
 
     private SecurityGuard resolveGuard(Authentication auth) {

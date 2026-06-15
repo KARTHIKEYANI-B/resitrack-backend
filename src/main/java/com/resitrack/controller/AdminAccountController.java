@@ -2,7 +2,9 @@ package com.resitrack.controller;
 
 import com.resitrack.dto.ApiResponse;
 import com.resitrack.entity.Admin;
+import com.resitrack.entity.AdminAssignment;
 import com.resitrack.exception.CustomException;
+import com.resitrack.repository.AdminAssignmentRepository;
 import com.resitrack.repository.AdminRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -20,16 +22,10 @@ import java.util.stream.Collectors;
 /**
  * AdminAccountController — Super Admin account management.
  *
- * Mapped to /admin/accounts so it falls under the existing SecurityConfig rule:
+ * Mapped to /admin/accounts, covered by SecurityConfig:
  *   .requestMatchers("/admin/**").hasRole("ADMIN")
  *
- * Previously these endpoints were placed inside AuthController under /auth/admin/accounts,
- * which was outside the /admin/** security rule and caused Spring to fail to locate
- * the handler, producing:
- *   "No static resource auth/admin/accounts"
- *
- * Moving them here fixes that without touching SecurityConfig, AuthController,
- * or any other existing feature.
+ * All write operations additionally enforce isSuperAdmin() at method level.
  */
 @RestController
 @RequestMapping("/admin/accounts")
@@ -37,14 +33,13 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AdminAccountController {
 
-    private final AdminRepository adminRepo;
-    private final PasswordEncoder passwordEncoder;
+    private final AdminRepository            adminRepo;
+    private final AdminAssignmentRepository  assignmentRepo;
+    private final PasswordEncoder            passwordEncoder;
 
     /**
      * GET /api/admin/accounts
-     *
-     * Returns all admin accounts (id, name, email, phone, position, superAdmin, forcePasswordChange).
-     * Super Admin only. Used by the Admin Accounts tab in MembersList → AdminAccountsPanel.
+     * Returns all admin accounts. Super Admin / President only.
      */
     @GetMapping
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> listAdminAccounts(
@@ -71,10 +66,7 @@ public class AdminAccountController {
 
     /**
      * PUT /api/admin/accounts/{adminId}/reset-password
-     *
-     * Super Admin only. Sets a new password for any admin account without requiring
-     * the current password. Used when position account credentials are unknown.
-     *
+     * Super Admin / President only. Sets a new password without requiring the current one.
      * Body: { "newPassword": "NewSecure@123" }
      */
     @PutMapping("/{adminId}/reset-password")
@@ -102,6 +94,60 @@ public class AdminAccountController {
                 "Password for " + target.getName() + " reset successfully", null));
     }
 
+    /**
+     * DELETE /api/admin/accounts/{adminId}
+     *
+     * Super Admin / President only.
+     * Removes a stale or duplicate admin account from the database.
+     *
+     * Safety rules enforced server-side:
+     *  - Cannot delete your own account.
+     *  - Cannot delete any account where superAdmin=true
+     *    (protects canonical Super Admin and active President).
+     *  - Cannot delete an account with an active committee assignment.
+     *  - Deletes historical AdminAssignment rows first (FK constraint).
+     */
+    @DeleteMapping("/{adminId}")
+    public ResponseEntity<ApiResponse<Void>> deleteAdminAccount(
+            @PathVariable Long adminId,
+            Authentication auth) {
+
+        requireSuperAdmin(auth);
+
+        Admin caller = adminRepo.findByEmail(auth.getName())
+                .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
+
+        Admin target = adminRepo.findById(adminId)
+                .orElseThrow(() -> new CustomException(
+                        "Admin account not found", HttpStatus.NOT_FOUND));
+
+        if (caller.getId().equals(target.getId()))
+            throw new CustomException(
+                    "You cannot delete your own account", HttpStatus.BAD_REQUEST);
+
+        if (target.isSuperAdmin())
+            throw new CustomException(
+                    "Cannot delete a Super Admin / President account. " +
+                    "Transfer presidency first if needed.", HttpStatus.BAD_REQUEST);
+
+        boolean hasActiveAssignment = assignmentRepo
+                .findByAdminIdAndActiveTrue(target.getId())
+                .isPresent();
+        if (hasActiveAssignment)
+            throw new CustomException(
+                    "Cannot delete '" + target.getEmail() +
+                    "' — it has an active committee assignment. Revoke it first.",
+                    HttpStatus.CONFLICT);
+
+        List<AdminAssignment> history = assignmentRepo.findByAdmin(target);
+        if (!history.isEmpty()) assignmentRepo.deleteAll(history);
+
+        adminRepo.delete(target);
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Admin account '" + target.getEmail() + "' deleted", null));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private void requireSuperAdmin(Authentication auth) {
@@ -109,6 +155,7 @@ public class AdminAccountController {
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
         if (!caller.isSuperAdmin())
             throw new CustomException(
-                    "Only Super Admin can manage admin accounts", HttpStatus.FORBIDDEN);
+                    "Only Super Admin / President can manage admin accounts",
+                    HttpStatus.FORBIDDEN);
     }
 }
