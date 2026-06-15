@@ -34,12 +34,15 @@ public class AdminAssignmentService {
     private final MemberRepository          memberRepo;
     private final PasswordEncoder           passwordEncoder;
 
+    // Canonical login emails — must match DataInitializer exactly.
+    // These are the accounts admins actually use to log in.
+    // NEVER use the old apartment.com emails here; those are purged on every startup.
     private static final Map<Member.Position, String> POSITION_EMAILS = Map.of(
-        Member.Position.PRESIDENT,       "admin.president@apartment.com",
-        Member.Position.VICE_PRESIDENT,  "admin.vicepresident@apartment.com",
-        Member.Position.SECRETARY,       "admin.secretary@apartment.com",
-        Member.Position.JOINT_SECRETARY, "admin.jointsecretary@apartment.com",
-        Member.Position.TREASURER,       "admin.treasurer@apartment.com"
+        Member.Position.PRESIDENT,       "superadmin@gmail.com",
+        Member.Position.VICE_PRESIDENT,  "vicepresident@gmail.com",
+        Member.Position.SECRETARY,       "secretary@gmail.com",
+        Member.Position.JOINT_SECRETARY, "joinsecratery@gmail.com",
+        Member.Position.TREASURER,       "treasurer@gmail.com"
     );
 
     private static final Map<Member.Position, String> POSITION_DISPLAY = Map.of(

@@ -1,5 +1,6 @@
 package com.resitrack.repository;
 
+import com.resitrack.entity.Admin;
 import com.resitrack.entity.AdminAssignment;
 import com.resitrack.entity.Member;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -31,4 +32,8 @@ public interface AdminAssignmentRepository extends JpaRepository<AdminAssignment
     Optional<AdminAssignment> findActiveByResidentAndPosition(
             @Param("residentId") Long residentId,
             @Param("position")   Member.Position position);
+
+    // Used by DataInitializer.purgeLegacyAccounts() to remove historical assignment
+    // rows before deleting the old apartment.com admin accounts.
+    List<AdminAssignment> findByAdmin(Admin admin);
 }
