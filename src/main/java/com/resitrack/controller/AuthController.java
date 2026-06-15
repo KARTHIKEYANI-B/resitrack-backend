@@ -16,19 +16,16 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class AuthController {
 
-    private final AuthService     authService;
-    private final ResidentService residentService;
+    private final AuthService       authService;
+    private final ResidentService   residentService;
 
-    // ── NEW: Single unified login endpoint ────────────────────────────────
-    // Accepts email/phone + password.
-    // Backend detects the role and returns the correct JWT + user object.
+    // ── Unified login (detects role automatically) ────────────────────────
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<JwtResponse>> unifiedLogin(@RequestBody LoginRequest req) {
         return ResponseEntity.ok(ApiResponse.success("Login successful", authService.unifiedLogin(req)));
     }
 
-    // ── Existing endpoints — unchanged ────────────────────────────────────
-
+    // ── Role-specific login endpoints (kept for backward compat) ──────────
     @PostMapping("/admin/login")
     public ResponseEntity<ApiResponse<JwtResponse>> adminLogin(@RequestBody LoginRequest req) {
         return ResponseEntity.ok(ApiResponse.success("Login successful", authService.adminLogin(req)));
@@ -44,6 +41,7 @@ public class AuthController {
         return ResponseEntity.ok(ApiResponse.success("Login successful", authService.securityLogin(req)));
     }
 
+    // ── Resident self-registration ────────────────────────────────────────
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<RegistrationStatusDTO>> register(
             @Valid @RequestBody RegisterRequest req) {
@@ -65,6 +63,7 @@ public class AuthController {
         return ResponseEntity.ok(ApiResponse.success("Valid register number", null));
     }
 
+    // ── Password change endpoints ─────────────────────────────────────────
     @PutMapping("/admin/change-password")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> changeAdminPassword(
@@ -89,4 +88,8 @@ public class AuthController {
         authService.changeSecurityPassword(auth.getName(), req);
         return ResponseEntity.ok(ApiResponse.success("Password changed successfully", null));
     }
+
+    // NOTE: Admin account listing and password reset endpoints have been moved to
+    // AdminAccountController (/admin/accounts) so they fall under the existing
+    // /admin/** security rule in SecurityConfig.
 }

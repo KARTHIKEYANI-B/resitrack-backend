@@ -73,9 +73,7 @@ public class MemberService {
         }
 
         memberRepo.findByPosition(position).ifPresent(old -> {
-            if (old.isPlaceholder()) {
-                memberRepo.delete(old);
-            }
+            if (old.isPlaceholder()) memberRepo.delete(old);
         });
 
         Member saved = memberRepo.save(member);
@@ -89,10 +87,12 @@ public class MemberService {
                 appointReq.setResetPassword(false);
                 assignmentService.appoint(appointReq);
             } catch (Exception e) {
-                
                 log.warn("Could not auto-create admin assignment for member {}: {}", saved.getId(), e.getMessage());
             }
         }
+
+        // ── Task 2: If Super Admin provided a password, apply it to the position admin account ──
+        applyAdminPasswordIfProvided(position, req.getAdminPassword());
 
         log.info("Member created: {} — {}", saved.getPosition().getDisplayName(), saved.getName());
         return MemberDTO.Response.from(saved);
@@ -108,18 +108,68 @@ public class MemberService {
         if (req.getPhoneNumber() != null) member.setPhoneNumber(req.getPhoneNumber());
         if (req.getJoinedDate()  != null) member.setJoinedDate(req.getJoinedDate());
         member.setActive(req.isActive());
+
+        // Sync name/phone to linked admin account
         if (member.getResident() != null) {
             adminRepo.findByResidentId(member.getResident().getId()).ifPresent(admin -> {
                 if (req.getName() != null) admin.setName(req.getName());
-                // Never update admin.email here — it's the position email
                 if (req.getPhoneNumber() != null) admin.setPhone(req.getPhoneNumber());
                 adminRepo.save(admin);
             });
         }
 
         Member saved = memberRepo.save(member);
+
+        // ── Task 2: If Super Admin provided a password, apply it to the position admin account ──
+        applyAdminPasswordIfProvided(member.getPosition(), req.getAdminPassword());
+
         log.info("Member updated: {} — {}", saved.getPosition().getDisplayName(), saved.getName());
         return MemberDTO.Response.from(saved);
+    }
+
+    /**
+     * TASK 2 — Applies adminPassword to the position admin account if:
+     *  - adminPassword is non-null and non-blank
+     *  - the position has a corresponding admin account in the DB
+     *
+     * This is only reachable via MemberController which already enforces Super Admin.
+     */
+    private void applyAdminPasswordIfProvided(Member.Position position, String adminPassword) {
+        if (adminPassword == null || adminPassword.isBlank()) return;
+        if (adminPassword.length() < 6) {
+            throw new CustomException(
+                    "Admin account password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        }
+
+        String positionEmail = resolvePositionEmail(position);
+        if (positionEmail == null) {
+            log.warn("No position email mapping for {}, skipping password update", position);
+            return;
+        }
+
+        adminRepo.findByEmail(positionEmail).ifPresent(admin -> {
+            admin.setPassword(passwordEncoder.encode(adminPassword.trim()));
+            admin.setForcePasswordChange(false);
+            adminRepo.save(admin);
+            log.info("Position admin password updated for: {} ({})",
+                    position.getDisplayName(), positionEmail);
+        });
+    }
+
+    /**
+     * Returns the canonical login email for each committee position.
+     *
+     * TASK 1 + TASK 2: Must match AdminAssignmentService.POSITION_EMAILS exactly.
+     * When position emails change in AdminAssignmentService, update this map too.
+     */
+    private String resolvePositionEmail(Member.Position position) {
+        return switch (position) {
+            case PRESIDENT       -> "superadmin@gmail.com";
+            case VICE_PRESIDENT  -> "admin.vicepresident@apartment.com";
+            case SECRETARY       -> "secretary@gmail.com";
+            case JOINT_SECRETARY -> "joinsecratery@gmail.com";
+            case TREASURER       -> "treasurer@gmail.com";
+        };
     }
 
     @Transactional
@@ -174,9 +224,8 @@ public class MemberService {
         if (req.getNewPresidentMemberId() != null) {
             newPresident = memberRepo.findById(req.getNewPresidentMemberId())
                     .orElseThrow(() -> new CustomException("New president member not found", HttpStatus.NOT_FOUND));
-            if (newPresident.getResident() == null) {
+            if (newPresident.getResident() == null)
                 throw new CustomException("Selected member has no linked resident", HttpStatus.BAD_REQUEST);
-            }
             newPresidentResident = newPresident.getResident();
         } else if (req.getNewPresidentResidentId() != null) {
             newPresidentResident = residentRepo.findById(req.getNewPresidentResidentId())
@@ -190,12 +239,10 @@ public class MemberService {
                     HttpStatus.BAD_REQUEST);
         }
 
-        if (newPresident.getId().equals(currentPresident.getId())) {
+        if (newPresident.getId().equals(currentPresident.getId()))
             throw new CustomException("New president is same as current president", HttpStatus.BAD_REQUEST);
-        }
 
         Member.Position oldPositionOfNew = newPresident.getPosition();
-
         currentPresident.setPosition(oldPositionOfNew);
         memberRepo.save(currentPresident);
         newPresident.setPosition(Member.Position.PRESIDENT);
