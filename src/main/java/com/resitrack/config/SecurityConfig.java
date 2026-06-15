@@ -19,6 +19,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+import static org.springframework.security.config.Customizer.withDefaults;
+
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
@@ -47,6 +49,15 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            // ── CORS ──────────────────────────────────────────────────────
+            // withDefaults() tells Spring Security to delegate CORS handling
+            // to the CorsFilter bean defined in CorsConfig.java.
+            // Without this line, Spring Security intercepts OPTIONS preflight
+            // requests before the CorsFilter runs, returning a 403 with no
+            // CORS headers — which the browser reports as a CORS error even
+            // though the actual issue is Spring Security blocking the request.
+            .cors(withDefaults())
+
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -54,10 +65,10 @@ public class SecurityConfig {
 
                 // Public auth endpoints
                 .requestMatchers(
-                    "/auth/login",                          // NEW unified login
-                    "/auth/admin/login",                    // kept for compat
-                    "/auth/user/login",                     // kept for compat
-                    "/auth/security/login",                 // kept for compat
+                    "/auth/login",
+                    "/auth/admin/login",
+                    "/auth/user/login",
+                    "/auth/security/login",
                     "/auth/register",
                     "/auth/validate-register-number/**",
                     "/auth/registration-status/**"
