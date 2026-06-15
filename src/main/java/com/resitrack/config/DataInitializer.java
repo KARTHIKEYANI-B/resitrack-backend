@@ -30,29 +30,19 @@ public class DataInitializer implements CommandLineRunner {
     private final ResidentRepository         residentRepo;
     private final MaintenanceRepository      maintenanceRepo;
     private final MemberService              memberService;
-<<<<<<< HEAD
     private final PasswordEncoder            passwordEncoder;
 
     // ── Canonical account emails ──────────────────────────────────────────────
     // These must match AdminAssignmentService.POSITION_EMAILS exactly.
     // When adding a new position, update both places.
-=======
-    private final AdminAssignmentService     assignmentService;
-    private final PasswordEncoder            passwordEncoder;
-
-    // ── Canonical account emails ──────────────────────────────────────────────
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
     private static final String SUPER_ADMIN_EMAIL    = "superadmin@gmail.com";
     private static final String SUPER_ADMIN_NAME     = "Super Admin";
     private static final String SUPER_ADMIN_PASSWORD = "Superadmin@123";
 
-<<<<<<< HEAD
     private static final String VICE_PRESIDENT_EMAIL    = "vicepresident@gmail.com";
     private static final String VICE_PRESIDENT_PASSWORD = "Vicepresident@123";
     private static final String VICE_PRESIDENT_NAME     = "Vice President";
 
-=======
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
     private static final String SECRETARY_EMAIL    = "secretary@gmail.com";
     private static final String SECRETARY_PASSWORD = "Secratery@123";
     private static final String SECRETARY_NAME     = "Secretary";
@@ -66,7 +56,6 @@ public class DataInitializer implements CommandLineRunner {
     private static final String TREASURER_NAME     = "Treasurer";
 
     /**
-<<<<<<< HEAD
      * Legacy emails that existed before the canonical gmail.com migration.
      * These are purged on every startup so only one account per position remains.
      * All five positions now have canonical gmail.com accounts; no apartment.com
@@ -75,15 +64,6 @@ public class DataInitializer implements CommandLineRunner {
     private static final List<String> LEGACY_EMAILS = List.of(
         "admin.president@apartment.com",
         "admin.vicepresident@apartment.com",    // VP now migrated to vicepresident@gmail.com
-=======
-     * Legacy emails that existed before Task 1 refactoring.
-     * These must be removed from the database so only one account per position remains.
-     * The Vice-President email is NOT in this list because the VP canonical email
-     * is still admin.vicepresident@apartment.com (no replacement was specified).
-     */
-    private static final List<String> LEGACY_EMAILS = List.of(
-        "admin.president@apartment.com",
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
         "admin.secretary@apartment.com",
         "admin.jointsecretary@apartment.com",
         "admin.treasurer@apartment.com",
@@ -92,7 +72,6 @@ public class DataInitializer implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-<<<<<<< HEAD
         purgeLegacyAccounts();           // remove all old apartment.com duplicates first
         initSuperAdmin();
         initDefaultPositionAccounts();   // create all 4 non-president canonical accounts
@@ -101,14 +80,6 @@ public class DataInitializer implements CommandLineRunner {
         // NOTE: assignmentService.seedPositionAdminAccounts() is intentionally NOT called here.
         // That method uses the old apartment.com email map and would recreate duplicate accounts.
         // All canonical position accounts are now managed exclusively by initDefaultPositionAccounts().
-=======
-        purgeLegacyAccounts();           // ← remove old apartment.com duplicates first
-        initSuperAdmin();
-        initDefaultPositionAccounts();
-        initMaintenance();
-        memberService.seedDefaultPositions();
-        assignmentService.seedPositionAdminAccounts();
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
         log.info("=== ResiTrack Data Initialization Complete ===");
     }
 
@@ -189,20 +160,12 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-<<<<<<< HEAD
     // ── Step 3: Ensure all position accounts exist (Secretary, VP, Joint Secretary, Treasurer) ─
     private void initDefaultPositionAccounts() {
         createPositionAccount(VICE_PRESIDENT_EMAIL, VICE_PRESIDENT_PASSWORD, VICE_PRESIDENT_NAME, Member.Position.VICE_PRESIDENT, false);
         createPositionAccount(SECRETARY_EMAIL,       SECRETARY_PASSWORD,       SECRETARY_NAME,       Member.Position.SECRETARY,       false);
         createPositionAccount(JOINT_SEC_EMAIL,       JOINT_SEC_PASSWORD,       JOINT_SEC_NAME,       Member.Position.JOINT_SECRETARY, false);
         createPositionAccount(TREASURER_EMAIL,       TREASURER_PASSWORD,       TREASURER_NAME,       Member.Position.TREASURER,       false);
-=======
-    // ── Step 3: Ensure Secretary / Joint Secretary / Treasurer accounts exist ─
-    private void initDefaultPositionAccounts() {
-        createPositionAccount(SECRETARY_EMAIL,  SECRETARY_PASSWORD,  SECRETARY_NAME,  Member.Position.SECRETARY,       false);
-        createPositionAccount(JOINT_SEC_EMAIL,  JOINT_SEC_PASSWORD,  JOINT_SEC_NAME,  Member.Position.JOINT_SECRETARY, false);
-        createPositionAccount(TREASURER_EMAIL,  TREASURER_PASSWORD,  TREASURER_NAME,  Member.Position.TREASURER,       false);
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
     }
 
     private void createPositionAccount(String email, String password, String name,

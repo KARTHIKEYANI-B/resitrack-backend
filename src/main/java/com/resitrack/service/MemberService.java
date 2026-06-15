@@ -158,23 +158,13 @@ public class MemberService {
 
     /**
      * Returns the canonical login email for each committee position.
-<<<<<<< HEAD
      * Must match AdminAssignmentService.POSITION_EMAILS and DataInitializer exactly.
      * When position emails change, update all three places together.
-=======
-     *
-     * TASK 1 + TASK 2: Must match AdminAssignmentService.POSITION_EMAILS exactly.
-     * When position emails change in AdminAssignmentService, update this map too.
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
      */
     private String resolvePositionEmail(Member.Position position) {
         return switch (position) {
             case PRESIDENT       -> "superadmin@gmail.com";
-<<<<<<< HEAD
             case VICE_PRESIDENT  -> "vicepresident@gmail.com";
-=======
-            case VICE_PRESIDENT  -> "admin.vicepresident@apartment.com";
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
             case SECRETARY       -> "secretary@gmail.com";
             case JOINT_SECRETARY -> "joinsecratery@gmail.com";
             case TREASURER       -> "treasurer@gmail.com";

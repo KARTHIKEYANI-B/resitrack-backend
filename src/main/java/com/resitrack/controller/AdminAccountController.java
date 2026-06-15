@@ -7,19 +7,13 @@ import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminAssignmentRepository;
 import com.resitrack.repository.AdminRepository;
 import lombok.RequiredArgsConstructor;
-<<<<<<< HEAD
 import lombok.extern.slf4j.Slf4j;
-=======
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
-<<<<<<< HEAD
 import org.springframework.transaction.annotation.Transactional;
-=======
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
@@ -28,26 +22,17 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
-<<<<<<< HEAD
  * AdminAccountController — Admin account management.
-=======
- * AdminAccountController — Super Admin account management.
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
  *
  * Mapped to /admin/accounts, covered by SecurityConfig:
  *   .requestMatchers("/admin/**").hasRole("ADMIN")
  *
-<<<<<<< HEAD
  * Permission model:
  *   GET  (list)           — any authenticated admin can view
  *   PUT  (reset-password) — Super Admin only
  *   DELETE                — Super Admin only
  */
 @Slf4j
-=======
- * All write operations additionally enforce isSuperAdmin() at method level.
- */
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
 @RestController
 @RequestMapping("/admin/accounts")
 @PreAuthorize("hasRole('ADMIN')")
@@ -60,7 +45,6 @@ public class AdminAccountController {
 
     /**
      * GET /api/admin/accounts
-<<<<<<< HEAD
      * Returns all admin accounts visible to any authenticated admin.
      * The response includes a "callerIsSuperAdmin" flag so the frontend
      * can show or hide edit / reset-password controls accordingly.
@@ -71,15 +55,6 @@ public class AdminAccountController {
 
         Admin caller = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
-=======
-     * Returns all admin accounts. Super Admin / President only.
-     */
-    @GetMapping
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> listAdminAccounts(
-            Authentication auth) {
-
-        requireSuperAdmin(auth);
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
 
         List<Map<String, Object>> accounts = adminRepo.findAll().stream()
                 .map(a -> {
@@ -95,7 +70,6 @@ public class AdminAccountController {
                 })
                 .collect(Collectors.toList());
 
-<<<<<<< HEAD
         // Return accounts + caller permission flag so the frontend can
         // conditionally show reset-password / delete controls.
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -103,14 +77,10 @@ public class AdminAccountController {
         payload.put("callerIsSuperAdmin", caller.isSuperAdmin());
 
         return ResponseEntity.ok(ApiResponse.success(payload));
-=======
-        return ResponseEntity.ok(ApiResponse.success(accounts));
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
     }
 
     /**
      * PUT /api/admin/accounts/{adminId}/reset-password
-<<<<<<< HEAD
      *
      * Super Admin / President only. Sets a new password without requiring the current one.
      * Body: { "newPassword": "NewSecure@123" }
@@ -129,13 +99,6 @@ public class AdminAccountController {
     @PutMapping("/{adminId}/reset-password")
     @Transactional
     public ResponseEntity<ApiResponse<Map<String, String>>> resetAdminPassword(
-=======
-     * Super Admin / President only. Sets a new password without requiring the current one.
-     * Body: { "newPassword": "NewSecure@123" }
-     */
-    @PutMapping("/{adminId}/reset-password")
-    public ResponseEntity<ApiResponse<Void>> resetAdminPassword(
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
             @PathVariable Long adminId,
             @RequestBody Map<String, String> body,
             Authentication auth) {
@@ -147,16 +110,12 @@ public class AdminAccountController {
             throw new CustomException(
                     "New password must be at least 6 characters", HttpStatus.BAD_REQUEST);
 
-<<<<<<< HEAD
         // Re-fetch within this transaction to get the latest state from the DB.
         // This prevents any stale entity state from a previous read in the same session.
-=======
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
         Admin target = adminRepo.findById(adminId)
                 .orElseThrow(() -> new CustomException(
                         "Admin account not found", HttpStatus.NOT_FOUND));
 
-<<<<<<< HEAD
         String encodedPassword = passwordEncoder.encode(newPassword.trim());
         target.setPassword(encodedPassword);
         target.setForcePasswordChange(false);
@@ -174,14 +133,6 @@ public class AdminAccountController {
         result.put("name",    saved.getName());
 
         return ResponseEntity.ok(ApiResponse.success(result));
-=======
-        target.setPassword(passwordEncoder.encode(newPassword.trim()));
-        target.setForcePasswordChange(false);
-        adminRepo.save(target);
-
-        return ResponseEntity.ok(ApiResponse.success(
-                "Password for " + target.getName() + " reset successfully", null));
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
     }
 
     /**
@@ -198,10 +149,7 @@ public class AdminAccountController {
      *  - Deletes historical AdminAssignment rows first (FK constraint).
      */
     @DeleteMapping("/{adminId}")
-<<<<<<< HEAD
     @Transactional
-=======
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
     public ResponseEntity<ApiResponse<Void>> deleteAdminAccount(
             @PathVariable Long adminId,
             Authentication auth) {
@@ -237,10 +185,7 @@ public class AdminAccountController {
         if (!history.isEmpty()) assignmentRepo.deleteAll(history);
 
         adminRepo.delete(target);
-<<<<<<< HEAD
         log.info("Admin account deleted: {} (id={})", target.getEmail(), target.getId());
-=======
->>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Admin account '" + target.getEmail() + "' deleted", null));
