@@ -7,13 +7,11 @@ import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminAssignmentRepository;
 import com.resitrack.repository.AdminRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
@@ -29,7 +27,6 @@ import java.util.stream.Collectors;
  *
  * All write operations additionally enforce isSuperAdmin() at method level.
  */
-@Slf4j
 @RestController
 @RequestMapping("/admin/accounts")
 @PreAuthorize("hasRole('ADMIN')")
@@ -69,24 +66,11 @@ public class AdminAccountController {
 
     /**
      * PUT /api/admin/accounts/{adminId}/reset-password
-     *
      * Super Admin / President only. Sets a new password without requiring the current one.
      * Body: { "newPassword": "NewSecure@123" }
-     *
-     * FIX — password reset not persisting to DB:
-     *   @Transactional  → wraps the entire method in one transaction so the UPDATE
-     *                     is committed atomically before the response is returned.
-     *   saveAndFlush()  → forces an immediate SQL UPDATE within the transaction
-     *                     instead of waiting for the session to flush at commit time.
-     *                     Eliminates any possibility of a stale first-level cache
-     *                     preventing the write from reaching the database.
-     *
-     * The response body now echoes the email of the account that was actually reset
-     * so the caller can verify they reset the correct account.
      */
     @PutMapping("/{adminId}/reset-password")
-    @Transactional
-    public ResponseEntity<ApiResponse<Map<String, String>>> resetAdminPassword(
+    public ResponseEntity<ApiResponse<Void>> resetAdminPassword(
             @PathVariable Long adminId,
             @RequestBody Map<String, String> body,
             Authentication auth) {
@@ -98,29 +82,16 @@ public class AdminAccountController {
             throw new CustomException(
                     "New password must be at least 6 characters", HttpStatus.BAD_REQUEST);
 
-        // Re-fetch within this transaction to get the latest state from the DB.
-        // This prevents any stale entity state from a previous read in the same session.
         Admin target = adminRepo.findById(adminId)
                 .orElseThrow(() -> new CustomException(
                         "Admin account not found", HttpStatus.NOT_FOUND));
 
-        String encodedPassword = passwordEncoder.encode(newPassword.trim());
-        target.setPassword(encodedPassword);
+        target.setPassword(passwordEncoder.encode(newPassword.trim()));
         target.setForcePasswordChange(false);
+        adminRepo.save(target);
 
-        // saveAndFlush() forces immediate SQL UPDATE within the current transaction.
-        // The UPDATE is committed to the DB when the transaction closes at method end.
-        Admin saved = adminRepo.saveAndFlush(target);
-
-        log.info("Password reset for admin account: {} (id={})", saved.getEmail(), saved.getId());
-
-        // Return the email so the caller can confirm they reset the correct account.
-        Map<String, String> result = new LinkedHashMap<>();
-        result.put("message", "Password for '" + saved.getEmail() + "' reset successfully.");
-        result.put("email",   saved.getEmail());
-        result.put("name",    saved.getName());
-
-        return ResponseEntity.ok(ApiResponse.success(result));
+        return ResponseEntity.ok(ApiResponse.success(
+                "Password for " + target.getName() + " reset successfully", null));
     }
 
     /**
@@ -137,7 +108,6 @@ public class AdminAccountController {
      *  - Deletes historical AdminAssignment rows first (FK constraint).
      */
     @DeleteMapping("/{adminId}")
-    @Transactional
     public ResponseEntity<ApiResponse<Void>> deleteAdminAccount(
             @PathVariable Long adminId,
             Authentication auth) {
@@ -173,7 +143,6 @@ public class AdminAccountController {
         if (!history.isEmpty()) assignmentRepo.deleteAll(history);
 
         adminRepo.delete(target);
-        log.info("Admin account deleted: {} (id={})", target.getEmail(), target.getId());
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Admin account '" + target.getEmail() + "' deleted", null));

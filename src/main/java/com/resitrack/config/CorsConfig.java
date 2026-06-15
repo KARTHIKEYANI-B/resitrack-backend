@@ -21,27 +21,18 @@ public class CorsConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
 
-        // ── Hardcoded allowed origins ──────────────────────────────────────
-        // Add every known Vercel deployment URL here.
-        // The CORS_ALLOWED_ORIGINS env var on Render is an additional override
-        // for any future URLs without requiring a redeploy.
+       
         List<String> origins = new ArrayList<>(List.of(
             "http://localhost:3000",
             "http://localhost:5173",
-            "https://resitrack-seven.vercel.app",
-            "https://resitrack-git-main-karthikeyani-bs-projects.vercel.app"
+            "http://localhost:4173"
         ));
 
-        // ── Additional origins from environment variable ───────────────────
-        // Set CORS_ALLOWED_ORIGINS on Render to add more origins without code changes.
-        // Format: comma-separated URLs, e.g.:
-        //   https://my-app.vercel.app,https://custom-domain.com
+        
         if (allowedOriginsConfig != null && !allowedOriginsConfig.isBlank()) {
             for (String origin : allowedOriginsConfig.split(",")) {
                 String trimmed = origin.trim();
-                if (!trimmed.isEmpty() && !origins.contains(trimmed)) {
-                    origins.add(trimmed);
-                }
+                if (!trimmed.isEmpty()) origins.add(trimmed);
             }
         }
 
@@ -49,7 +40,6 @@ public class CorsConfig {
         config.setAllowedHeaders(List.of("*"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         config.setExposedHeaders(List.of("Authorization", "Content-Disposition"));
-        config.setMaxAge(3600L); // cache preflight response for 1 hour
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
