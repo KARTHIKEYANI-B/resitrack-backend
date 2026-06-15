@@ -34,12 +34,24 @@ public class AdminAssignmentService {
     private final MemberRepository          memberRepo;
     private final PasswordEncoder           passwordEncoder;
 
+<<<<<<< HEAD
     // Canonical login emails — must match DataInitializer exactly.
     // These are the accounts admins actually use to log in.
     // NEVER use the old apartment.com emails here; those are purged on every startup.
     private static final Map<Member.Position, String> POSITION_EMAILS = Map.of(
         Member.Position.PRESIDENT,       "superadmin@gmail.com",
         Member.Position.VICE_PRESIDENT,  "vicepresident@gmail.com",
+=======
+    // ── TASK 1: Position Email Map ────────────────────────────────────────────
+    // These are the canonical login emails for each committee position.
+    // Must match:
+    //   - DataInitializer.java  (creates accounts with these emails)
+    //   - MemberService.java    (resolvePositionEmail — for Task 2 password update)
+    //   - MembersList.jsx       (POSITION_EMAILS constant — for UI display)
+    private static final Map<Member.Position, String> POSITION_EMAILS = Map.of(
+        Member.Position.PRESIDENT,       "superadmin@gmail.com",
+        Member.Position.VICE_PRESIDENT,  "admin.vicepresident@apartment.com",
+>>>>>>> 01fcf80d79b026e4e8dd810a2d1f6d2cd8639244
         Member.Position.SECRETARY,       "secretary@gmail.com",
         Member.Position.JOINT_SECRETARY, "joinsecratery@gmail.com",
         Member.Position.TREASURER,       "treasurer@gmail.com"
@@ -51,6 +63,16 @@ public class AdminAssignmentService {
         Member.Position.SECRETARY,       "Secretary",
         Member.Position.JOINT_SECRETARY, "Joint Secretary",
         Member.Position.TREASURER,       "Treasurer"
+    );
+
+    // Default passwords for position accounts (set ONLY on first creation).
+    // Must match DataInitializer.java constants.
+    private static final Map<Member.Position, String> POSITION_DEFAULT_PASSWORDS = Map.of(
+        Member.Position.PRESIDENT,       "Superadmin@123",
+        Member.Position.VICE_PRESIDENT,  "Vicepresident@123",
+        Member.Position.SECRETARY,       "Secratery@123",
+        Member.Position.JOINT_SECRETARY, "Joinseratery@123",
+        Member.Position.TREASURER,       "Treasurer@123"
     );
 
     public List<AdminAssignmentDTO.Response> getActiveAssignments() {
@@ -102,17 +124,19 @@ public class AdminAssignmentService {
 
         Admin positionAdmin = adminRepo.findByEmail(positionEmail)
                 .orElseGet(() -> {
+                    // Account does not exist yet — create with default password (no force-change)
+                    String defaultPwd = POSITION_DEFAULT_PASSWORDS.getOrDefault(
+                            position, generateSecurePassword());
                     Admin a = Admin.builder()
                             .name(POSITION_DISPLAY.get(position))
                             .email(positionEmail)
-                            // Temporary password — will be set/reset below
-                            .password(passwordEncoder.encode(generateSecurePassword()))
+                            .password(passwordEncoder.encode(defaultPwd))
                             .superAdmin(position == Member.Position.PRESIDENT)
-                            .forcePasswordChange(true)
+                            .forcePasswordChange(false)
                             .position(position)
                             .build();
                     Admin saved = adminRepo.save(a);
-                    log.info("Created position-based admin account: {}", positionEmail);
+                    log.info("Created position-based admin account: {} with default password", positionEmail);
                     return saved;
                 });
 
@@ -223,6 +247,12 @@ public class AdminAssignmentService {
         return appoint(req);
     }
 
+    /**
+     * Ensures all position admin accounts exist in the database.
+     * Skips accounts already created by DataInitializer (Secretary, Joint Secretary, Treasurer,
+     * Super Admin). Only creates Vice-President and President if missing.
+     * Passwords are set only on first creation — existing passwords are never overwritten.
+     */
     @Transactional
     public void seedPositionAdminAccounts() {
         for (Member.Position position : Member.Position.values()) {
@@ -230,20 +260,27 @@ public class AdminAssignmentService {
             if (email == null) continue;
 
             if (!adminRepo.existsByEmail(email)) {
-                String tempPassword = generateSecurePassword();
+                // Use the known default password; no force-change so the account is immediately usable
+                String defaultPwd = POSITION_DEFAULT_PASSWORDS.getOrDefault(
+                        position, generateSecurePassword());
                 Admin a = Admin.builder()
                         .name(POSITION_DISPLAY.get(position) + " Account")
                         .email(email)
-                        .password(passwordEncoder.encode(tempPassword))
+                        .password(passwordEncoder.encode(defaultPwd))
                         .superAdmin(position == Member.Position.PRESIDENT)
-                        .forcePasswordChange(true)
+                        .forcePasswordChange(false)
                         .position(position)
                         .build();
                 adminRepo.save(a);
-                log.info("Seeded position admin account: {} (temp pwd logged once — change immediately)", email);
-                // Log temp password ONCE so admin can do initial login
-                log.warn("INITIAL CREDENTIALS [{}]: email={} password={} — CHANGE IMMEDIATELY",
-                        position.getDisplayName(), email, tempPassword);
+                log.info("Seeded position admin account: {} with default password", email);
+            } else {
+                // Account exists — clear forcePasswordChange so login works
+                Admin a = adminRepo.findByEmail(email).get();
+                if (a.isForcePasswordChange()) {
+                    a.setForcePasswordChange(false);
+                    adminRepo.save(a);
+                    log.info("Cleared forcePasswordChange for position account: {}", email);
+                }
             }
         }
     }
