@@ -86,13 +86,15 @@ public class SecurityController {
         return ResponseEntity.ok(ApiResponse.success("Security account deleted", null));
     }
 
-    /** Send a message to a security guard — any authenticated Admin role. */
+    /** Send a message to a security guard — Super Admin / President only. */
     @PostMapping("/admin/security/{guardId}/message")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Notification>> sendMessageToGuard(
             @PathVariable Long guardId,
             @RequestBody Map<String, String> body,
             Authentication auth) {
+
+        requireSuperAdmin(auth);
 
         SecurityGuard guard = guardRepo.findById(guardId)
                 .orElseThrow(() -> new CustomException(
