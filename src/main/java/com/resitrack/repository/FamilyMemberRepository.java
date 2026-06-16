@@ -40,4 +40,9 @@ public interface FamilyMemberRepository extends JpaRepository<FamilyMember, Long
     List<FamilyMember> findByAgeRange(@Param("minAge") int minAge, @Param("maxAge") int maxAge);
 
     List<FamilyMember> findByResidentIdAndActiveTrue(Long residentId);
+
+
+    Optional<FamilyMember> findByEmailAndHasAppAccessTrue(String email);
+
+    Optional<FamilyMember> findByPhoneAndHasAppAccessTrue(String phone);
 }
