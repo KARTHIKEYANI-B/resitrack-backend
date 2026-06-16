@@ -2,14 +2,20 @@ package com.resitrack.controller;
 
 import com.resitrack.dto.*;
 import com.resitrack.entity.Maintenance;
+import com.resitrack.entity.Notification;
 import com.resitrack.entity.Payment;
 import com.resitrack.entity.Resident;
+import com.resitrack.entity.SecurityGuard;
+import com.resitrack.exception.CustomException;
 import com.resitrack.repository.MaintenanceRepository;
+import com.resitrack.repository.NotificationRepository;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.PaymentVerificationRequestRepository;
+import com.resitrack.repository.SecurityGuardRepository;
 import com.resitrack.service.DashboardService;
 import com.resitrack.service.ResidentService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
@@ -28,6 +34,8 @@ public class UserController {
     private final ResidentService                       residentService;
     private final MaintenanceRepository                 maintenanceRepo;
     private final PaymentRepository                     paymentRepo;
+    private final SecurityGuardRepository               guardRepo;
+    private final NotificationRepository                notifRepo;
     // FIX: Inject verification repo so we can detect PENDING screenshot submissions
     // and surface the correct PENDING_VERIFICATION status to the owner/FM immediately
     // after they submit — without waiting for admin to approve.
@@ -171,5 +179,58 @@ public class UserController {
         } catch (Exception e) {
             return yearMonth;
         }
+    }
+
+    // ── User / Family Member → Security messaging ─────────────────────────
+
+    /** List all active security guards (for message recipient picker). */
+    @GetMapping("/security/guards")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> listSecurityGuards() {
+        List<Map<String, Object>> result = guardRepo.findAll().stream()
+                .filter(SecurityGuard::isActive)
+                .map(g -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id",    g.getId());
+                    m.put("name",  g.getName());
+                    m.put("phone", g.getPhone());
+                    return m;
+                })
+                .toList();
+        return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    /** Owner / Family Member sends a message to a specific security guard. */
+    @PostMapping("/security/{guardId}/message")
+    public ResponseEntity<ApiResponse<Notification>> sendMessageToSecurity(
+            @PathVariable Long guardId,
+            @RequestBody Map<String, String> body,
+            Authentication auth) {
+
+        Resident resident = residentService.getByEmail(auth.getName());
+
+        SecurityGuard guard = guardRepo.findById(guardId)
+                .orElseThrow(() -> new CustomException(
+                        "Security account not found", HttpStatus.NOT_FOUND));
+
+        String title   = body.getOrDefault("title", "Message from Resident");
+        String message = body.getOrDefault("message", "");
+        if (message.isBlank())
+            throw new CustomException("Message cannot be empty", HttpStatus.BAD_REQUEST);
+
+        String senderLabel = resident.getFullName() != null
+                ? resident.getFullName()
+                : auth.getName();
+
+        Notification notif = Notification.builder()
+                .title(title.isBlank() ? "Message from " + senderLabel : title)
+                .message("[" + senderLabel + "]: " + message)
+                .type(Notification.NotificationType.ANNOUNCEMENT)
+                .recipientRole("SECURITY")
+                .targetAdminId(guard.getId())   // targetAdminId reused as targetGuardId for SECURITY role
+                .residentName(guard.getName())
+                .isRead(false)
+                .build();
+
+        return ResponseEntity.ok(ApiResponse.success("Message sent", notifRepo.save(notif)));
     }
 }
