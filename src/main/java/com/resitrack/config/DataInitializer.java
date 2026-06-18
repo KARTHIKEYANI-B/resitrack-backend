@@ -39,6 +39,23 @@ public class DataInitializer implements CommandLineRunner {
     private static final String SUPER_ADMIN_NAME     = "Super Admin";
     private static final String SUPER_ADMIN_PASSWORD = "Superadmin@123";
 
+    // Secondary Super Admin account — used for client demos and QA flow testing.
+    // Mirrors initSuperAdmin() exactly: same role, same permissions, same encoder.
+    // Must also be added to SUPER_ADMIN_EMAILS below or initSuperAdmin() will
+    // strip its superAdmin flag back to false on the next restart.
+    private static final String TEST_SUPER_ADMIN_EMAIL    = "test@gmail.com";
+    private static final String TEST_SUPER_ADMIN_NAME     = "Test Super Admin";
+    private static final String TEST_SUPER_ADMIN_PASSWORD = "Test@123";
+    private static final String TEST_SUPER_ADMIN_PHONE    = "9999999999";
+
+    // All emails that are allowed to hold is_super_admin = true.
+    // initSuperAdmin() demotes any OTHER admin row that has the flag set,
+    // so every canonical super-admin account must be listed here.
+    private static final List<String> SUPER_ADMIN_EMAILS = List.of(
+        SUPER_ADMIN_EMAIL,
+        TEST_SUPER_ADMIN_EMAIL
+    );
+
     private static final String VICE_PRESIDENT_EMAIL    = "vicepresident@gmail.com";
     private static final String VICE_PRESIDENT_PASSWORD = "Vicepresident@123";
     private static final String VICE_PRESIDENT_NAME     = "Vice President";
@@ -74,6 +91,7 @@ public class DataInitializer implements CommandLineRunner {
     public void run(String... args) {
         purgeLegacyAccounts();           // remove all old apartment.com duplicates first
         initSuperAdmin();
+        initTestSuperAdmin();            // secondary Super Admin account for demo/QA
         initDefaultPositionAccounts();   // create all 4 non-president canonical accounts
         initMaintenance();
         memberService.seedDefaultPositions();
@@ -132,7 +150,7 @@ public class DataInitializer implements CommandLineRunner {
     // ── Step 2: Ensure Super Admin account exists ─────────────────────────────
     private void initSuperAdmin() {
         adminRepo.findAll().forEach(a -> {
-            if (!SUPER_ADMIN_EMAIL.equals(a.getEmail()) && a.isSuperAdmin()) {
+            if (!SUPER_ADMIN_EMAILS.contains(a.getEmail()) && a.isSuperAdmin()) {
                 a.setSuperAdmin(false);
                 adminRepo.save(a);
                 log.warn("Removed stale superAdmin flag from: {}", a.getEmail());
@@ -157,6 +175,42 @@ public class DataInitializer implements CommandLineRunner {
             if (superAdmin.isForcePasswordChange())  { superAdmin.setForcePasswordChange(false); dirty = true; }
             if (dirty) adminRepo.save(superAdmin);
             log.info("Super Admin account ready (existing password preserved): {}", SUPER_ADMIN_EMAIL);
+        }
+    }
+
+    // ── Step 2b: Ensure secondary (test/demo) Super Admin account exists ──────
+    /**
+     * Creates a second, fully-equivalent Super Admin account for client demos
+     * and QA flow testing, identified by TEST_SUPER_ADMIN_EMAIL.
+     *
+     * Mirrors initSuperAdmin() exactly:
+     *  - Same builder shape, same PasswordEncoder (BCrypt, strength 12 — see
+     *    SecurityConfig.passwordEncoder()), same superAdmin=true flag.
+     *  - Idempotent: only creates the row if it doesn't already exist; never
+     *    touches the password of an existing account with this email (so if
+     *    someone later changes the password in-app, restarts won't revert it).
+     *  - position is left null — this account is not tied to a committee seat,
+     *    so it cannot collide with AdminAssignmentService's seat-holder logic.
+     *  - Does not modify, delete, or affect any other admin row.
+     */
+    private void initTestSuperAdmin() {
+        if (!adminRepo.existsByEmail(TEST_SUPER_ADMIN_EMAIL)) {
+            Admin testSuperAdmin = Admin.builder()
+                    .name(TEST_SUPER_ADMIN_NAME)
+                    .email(TEST_SUPER_ADMIN_EMAIL)
+                    .phone(TEST_SUPER_ADMIN_PHONE)
+                    .password(passwordEncoder.encode(TEST_SUPER_ADMIN_PASSWORD))
+                    .superAdmin(true)
+                    .forcePasswordChange(false)
+                    .build();
+            adminRepo.save(testSuperAdmin);
+            log.info("Test Super Admin created: {} / {}", TEST_SUPER_ADMIN_EMAIL, TEST_SUPER_ADMIN_PASSWORD);
+        } else {
+            Admin testSuperAdmin = adminRepo.findByEmail(TEST_SUPER_ADMIN_EMAIL).get();
+            boolean dirty = false;
+            if (!testSuperAdmin.isSuperAdmin())   { testSuperAdmin.setSuperAdmin(true); dirty = true; }
+            if (dirty) adminRepo.save(testSuperAdmin);
+            log.info("Test Super Admin account ready (existing password preserved): {}", TEST_SUPER_ADMIN_EMAIL);
         }
     }
 
