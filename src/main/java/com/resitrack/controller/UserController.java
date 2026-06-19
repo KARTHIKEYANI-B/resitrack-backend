@@ -36,23 +36,18 @@ public class UserController {
     private final PaymentRepository                     paymentRepo;
     private final SecurityGuardRepository               guardRepo;
     private final NotificationRepository                notifRepo;
-    // FIX: Inject verification repo so we can detect PENDING screenshot submissions
-    // and surface the correct PENDING_VERIFICATION status to the owner/FM immediately
-    // after they submit — without waiting for admin to approve.
     private final PaymentVerificationRequestRepository  verificationRepo;
 
     @GetMapping("/dashboard/stats")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getDashboardStats(Authentication auth) {
         Resident r     = residentService.getByEmail(auth.getName());
         Resident owner = residentService.getEffectiveOwnerResident(r);
-        // Family Members see their owner's property stats (same flat/maintenance data)
         return ResponseEntity.ok(ApiResponse.success(dashboardService.getUserStats(owner.getId())));
     }
 
     @GetMapping("/maintenance/current")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentMaintenance(Authentication auth) {
         Resident raw      = residentService.getByEmail(auth.getName());
-        // Family Members see their owner's maintenance details (same property)
         Resident resident = residentService.getEffectiveOwnerResident(raw);
 
         int year  = LocalDate.now().getYear();
@@ -78,24 +73,15 @@ public class UserController {
 
         Maintenance m = activeMaint.get();
 
-        // ── Determine payment status using pendingAmount as source of truth ────
-        //
-        // Step 1: Use property-level paid sum (owner + ALL FM payments linked to property).
-        //   sumPaidAmountByPropertyAndPaymentMonth handles both owner-stored and FM-stored
-        //   payments, so a FM making the final payment correctly sets status to PAID.
         Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(
                 resident.getId(), currentMonthStr);
         double paidSoFar     = paidRaw != null ? paidRaw : 0.0;
         double maintAmount   = m.getAmount() != null ? m.getAmount().doubleValue() : 0.0;
         double pendingAmount = Math.max(0.0, maintAmount - paidSoFar);
 
-        // Step 2: Derive status from pendingAmount — the single source of truth.
-        //   pending == 0  → PAID (full amount received)
-        //   pending >  0  → check for pending verification request
         String status;
         String txnId = null;
         if (pendingAmount < 0.005) {
-            // Fully paid — find the transaction ID from the most recent PAID payment
             status = "PAID";
             txnId  = paymentRepo.findByResidentId(resident.getId()).stream()
                     .filter(p -> currentMonthStr.equals(p.getPaymentMonth())
@@ -105,7 +91,6 @@ public class UserController {
                     .map(Payment::getTransactionId)
                     .orElse(null);
         } else {
-            // Not fully paid — check if a verification request is pending
             boolean hasPendingVerification = verificationRepo
                     .existsPendingByResidentIdAndPaymentMonth(resident.getId(), currentMonthStr);
             status = hasPendingVerification ? "PENDING_VERIFICATION" : "PENDING";
@@ -143,10 +128,6 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(residentService.toDTO(r)));
     }
 
-    /**
-     * Update basic profile fields (fullName, phone, address, vehicleDetails).
-     * Existing endpoint — kept for backwards compatibility.
-     */
     @PutMapping("/profile")
     public ResponseEntity<ApiResponse<ResidentDTO>> updateProfile(
             @RequestBody ResidentDTO dto, Authentication auth) {
@@ -155,10 +136,6 @@ public class UserController {
                 residentService.updateResident(r.getId(), dto)));
     }
 
-    /**
-     * Update full owner profile including insurance and taxes reminder fields.
-     * Called when owner saves from the vehicle insurance or taxes reminder sections.
-     */
     @PutMapping("/profile/full")
     public ResponseEntity<ApiResponse<ResidentDTO>> updateFullProfile(
             @RequestBody ResidentDTO dto, Authentication auth) {
@@ -181,9 +158,6 @@ public class UserController {
         }
     }
 
-    // ── User / Family Member → Security messaging ─────────────────────────
-
-    /** List all active security guards (for message recipient picker). */
     @GetMapping("/security/guards")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> listSecurityGuards() {
         List<Map<String, Object>> result = guardRepo.findAll().stream()
@@ -199,7 +173,6 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(result));
     }
 
-    /** Owner / Family Member sends a message to a specific security guard. */
     @PostMapping("/security/{guardId}/message")
     public ResponseEntity<ApiResponse<Notification>> sendMessageToSecurity(
             @PathVariable Long guardId,
@@ -226,7 +199,7 @@ public class UserController {
                 .message("[" + senderLabel + "]: " + message)
                 .type(Notification.NotificationType.ANNOUNCEMENT)
                 .recipientRole("SECURITY")
-                .targetAdminId(guard.getId())   // targetAdminId reused as targetGuardId for SECURITY role
+                .targetAdminId(guard.getId())   
                 .residentName(guard.getName())
                 .isRead(false)
                 .build();

@@ -29,8 +29,8 @@ public class AuthService {
 
     private final AdminRepository         adminRepo;
     private final ResidentRepository      residentRepo;
-    private final SecurityGuardRepository securityGuardRepo;   // NEW — injected for unified login
-    private final FamilyMemberRepository  familyMemberRepo;    // for FM personal-email login fallback
+    private final SecurityGuardRepository securityGuardRepo;   
+    private final FamilyMemberRepository  familyMemberRepo;    
     private final PasswordEncoder         passwordEncoder;
     private final JwtTokenProvider        jwtTokenProvider;
     private final NotificationService     notificationService;
@@ -38,11 +38,6 @@ public class AuthService {
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("dd-MMM-yyyy hh:mm a");
 
-    // ══════════════════════════════════════════════════════════════════════
-    // NEW — Unified login
-    // Tries Admin → Security → Resident in order.
-    // Returns the same JwtResponse shape used by the individual endpoints.
-    // ══════════════════════════════════════════════════════════════════════
     public JwtResponse unifiedLogin(LoginRequest req) {
         String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
         String password   = req.getPassword();
@@ -81,13 +76,6 @@ public class AuthService {
             return buildResidentResponse(r);
         }
 
-        // 4. Family Member personal-contact email/phone fallback.
-        //    A Family Member's login account (Resident row) uses the email/phone
-        //    the Owner chose when granting access — often different from the FM's
-        //    personal contact email stored in the family_members table.
-        //    If the standard lookup above found nothing, check whether the identifier
-        //    matches a personal contact email or phone of an FM that has app access,
-        //    then authenticate against their linked Resident login account.
         Resident fmLoginAccount = resolveFamilyMemberLoginByPersonalContact(identifier);
         if (fmLoginAccount != null) {
             if (!passwordEncoder.matches(password, fmLoginAccount.getPassword()))
@@ -350,34 +338,16 @@ public class AuthService {
         }
     }
 
-    /**
-     * Family Member personal-contact email/phone login fallback.
-     *
-     * A Family Member's Resident login account (residents table) is created with:
-     *   - residents.email  = a SEPARATE login email chosen by the Owner during grant-access
-     *   - residents.phone  = the FM's phone (if available and not already taken)
-     *
-     * The FM's PERSONAL contact details (family_members.email / family_members.phone)
-     * may differ from those login credentials.  When a FM tries to log in with their
-     * personal email and the standard residentRepo lookup finds nothing, this method
-     * searches the family_members table by personal email (then phone), retrieves the
-     * linked Resident login account via fm.userId, and returns it for authentication.
-     *
-     * Returns null (not throws) so the caller can fall through to "Invalid credentials"
-     * if no match is found — keeping the error message consistent.
-     */
+
     private Resident resolveFamilyMemberLoginByPersonalContact(String identifier) {
-        // Try personal email first
         FamilyMember fm = familyMemberRepo.findByEmailAndHasAppAccessTrue(identifier).orElse(null);
 
-        // Try personal phone if email lookup found nothing
         if (fm == null) {
             fm = familyMemberRepo.findByPhoneAndHasAppAccessTrue(identifier).orElse(null);
         }
 
         if (fm == null || fm.getUserId() == null) return null;
 
-        // Load and return the Resident login account linked to this Family Member
         return residentRepo.findById(fm.getUserId()).orElse(null);
     }
 }

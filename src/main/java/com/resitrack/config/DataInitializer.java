@@ -72,12 +72,6 @@ public class DataInitializer implements CommandLineRunner {
     private static final String TREASURER_PASSWORD = "Treasurer@123";
     private static final String TREASURER_NAME     = "Treasurer";
 
-    /**
-     * Legacy emails that existed before the canonical gmail.com migration.
-     * These are purged on every startup so only one account per position remains.
-     * All five positions now have canonical gmail.com accounts; no apartment.com
-     * account should survive past purgeLegacyAccounts().
-     */
     private static final List<String> LEGACY_EMAILS = List.of(
         "admin.president@apartment.com",
         "admin.vicepresident@apartment.com",    // VP now migrated to vicepresident@gmail.com
@@ -95,24 +89,9 @@ public class DataInitializer implements CommandLineRunner {
         initDefaultPositionAccounts();   // create all 4 non-president canonical accounts
         initMaintenance();
         memberService.seedDefaultPositions();
-        // NOTE: assignmentService.seedPositionAdminAccounts() is intentionally NOT called here.
-        // That method uses the old apartment.com email map and would recreate duplicate accounts.
-        // All canonical position accounts are now managed exclusively by initDefaultPositionAccounts().
         log.info("=== ResiTrack Data Initialization Complete ===");
     }
 
-    // ── Step 1: Remove legacy duplicate accounts ──────────────────────────────
-    /**
-     * Deletes the old apartment.com admin accounts that were created by the original
-     * AdminAssignmentService.seedPositionAdminAccounts() call.  Running this once
-     * collapses each position back to a single canonical account.
-     *
-     * Safety rules:
-     *  - Only deletes accounts whose email is in the known LEGACY_EMAILS list.
-     *  - Deletes the account's AdminAssignment history rows first (FK constraint).
-     *  - Skips any legacy account that somehow has an ACTIVE assignment (defensive guard).
-     *  - Idempotent: if the account is already gone, does nothing.
-     */
     @Transactional
     protected void purgeLegacyAccounts() {
         for (String email : LEGACY_EMAILS) {
@@ -147,7 +126,6 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    // ── Step 2: Ensure Super Admin account exists ─────────────────────────────
     private void initSuperAdmin() {
         adminRepo.findAll().forEach(a -> {
             if (!SUPER_ADMIN_EMAILS.contains(a.getEmail()) && a.isSuperAdmin()) {

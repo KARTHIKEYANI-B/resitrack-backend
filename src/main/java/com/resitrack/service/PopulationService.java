@@ -16,26 +16,7 @@ public class PopulationService {
     private final FamilyMemberRepository familyMemberRepo;
     private final AdminRepository       adminRepo;
 
-    /**
-     * Computes the Apartment Population Summary.
-     *
-     * Population = Unique Residents + Unique Family Members
-     *
-     * No double-counting:
-     * - Owners = active non-deleted OWNER residents (counted once, regardless of roles)
-     * - FamilyMembers = active family_members records (not login rows)
-     * - Admins are only counted if they are NOT already counted as an Owner.
-     *   An Admin with a non-null residentId is already included in the owner count.
-     *
-     * Formula:
-     *   totalPopulation = totalOwners
-     *                   + totalFamilyMembers
-     *                   + adminsWithNoResidentLink   ← pure admins only
-     *
-     * Example:
-     *   Karthikeyani is both OWNER and ADMIN → counted once via totalOwners
-     *   Super-admin account with no resident row → counted once via adminsWithNoResidentLink
-     */
+
     public PopulationStatsDTO getPopulationStats() {
 
         // ── Owners ─────────────────────────────────────────────────────────
@@ -43,46 +24,24 @@ public class PopulationService {
         long totalVillaOwners = residentRepo.countActiveNonDeletedByPropertyType(PropertyType.VILLA);
         long totalOwners      = totalFlatOwners + totalVillaOwners;
 
-        // ── Family Members ──────────────────────────────────────────────────
-        //
-        // totalFamilyMembers = sum of all owners' registered familyMembers values
-        //                      MINUS the owners themselves (each owner counted
-        //                      separately in totalOwners).
-        //
-        // Example: owner registers familyMembers = 3 (= owner + 2 dependants)
-        //   → contributes 2 non-owner family members to the population count.
-        //
-        // "With App Access" stays as-is: it counts family_member login accounts
-        // that were explicitly given app access — that count is already correct.
+
         long sumRegisteredHouseholdSize = residentRepo.sumRegisteredFamilyMembersCount();
-        // Subtract owners because the registered count includes the owner themselves
         long totalFamilyMembers       = Math.max(0, sumRegisteredHouseholdSize - totalOwners);
         long familyMembersWithAccess  = familyMemberRepo.countByActiveTrueAndHasAppAccessTrue();
 
-        // ── Admins ──────────────────────────────────────────────────────────
-        long totalAdmins      = adminRepo.count();
         long totalSuperAdmins = 0; // updated below if column exists
         try {
             totalSuperAdmins = adminRepo.countBySuperAdminTrue();
         } catch (Exception ignored) {
-            // column may not exist in older schema — gracefully default to 0
         }
-
-        // Admins who are ALSO residents are already counted as Owners above.
-        // Only admins with NO linked resident row are new, unique persons.
+        long totalAdminAccounts = adminRepo.count();
+        long totalAdmins        = Math.max(0, totalAdminAccounts - totalSuperAdmins);
         long adminsWithNoResidentLink = adminRepo.countByResidentIdIsNull();
 
-        // ── Active login users ─────────────────────────────────────────────
-        // Owner active logins + family member active logins
         long activeOwnerLogins = residentRepo.countAllActiveNonDeleted();
         long activeFmLogins    = residentRepo.countActiveFamilyMemberLogins();
         long totalActiveUsers  = activeOwnerLogins + activeFmLogins;
 
-        // ── Grand total ────────────────────────────────────────────────────
-        // Each unique person is counted exactly once:
-        //   - Owners (even if they also hold admin roles) → counted via totalOwners
-        //   - Pure admins with no resident link          → counted via adminsWithNoResidentLink
-        //   - Family Members (as people)                 → counted via totalFamilyMembers
         long totalPopulation = totalOwners + totalFamilyMembers + adminsWithNoResidentLink;
 
         // ── Age breakdown (from family_members.age) ────────────────────────

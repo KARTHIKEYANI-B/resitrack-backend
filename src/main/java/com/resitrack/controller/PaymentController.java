@@ -33,28 +33,6 @@ public class PaymentController {
         return ResponseEntity.ok(paymentService.getAllPayments(status));
     }
 
-    /**
-     * GET /admin/payments/tracking-stats
-     *
-     * Task 1 — corrected Pending Dues formula:
-     *
-     *   annualPendingDues = totalExpectedYTD − totalCollectedYTD
-     *
-     * where:
-     *   totalExpectedYTD  = activeOwners × maintAmountPerOwner × completedMonths
-     *                       (Jan … previous calendar month, inclusive)
-     *   totalCollectedYTD = SUM of all PAID payments Jan … previousMonth of current year
-     *
-     * "Completed months" = months from January up to (but NOT including) the current
-     *  calendar month, because the current month is still in progress.
-     *  Example: if today is June, completedMonths = 5 (Jan–May).
-     *
-     * This replaces the old formula: unpaidOwners × flatMaintAmount  (wrong because
-     * it was month-only, not year-based, and did not subtract actual collections).
-     *
-     * The existing fields (paidOwners, unpaidOwners, totalCollectedThisMonth, etc.)
-     * are unchanged — only totalPendingAmount and the three new annual fields change.
-     */
     @GetMapping("/admin/payments/tracking-stats")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentTrackingStatsDTO>> getTrackingStats() {
@@ -89,24 +67,6 @@ public class PaymentController {
         cashCollected = cashCollected == null ? 0.0 : cashCollected;
 
         double collPct = activeOwners > 0 ? (paidOwners * 100.0 / activeOwners) : 0.0;
-
-        // ── Task 1: Annual Pending Dues ───────────────────────────────────
-        //
-        // Formula:
-        //   annualPendingDues = totalExpectedYTD − totalCollectedYTD
-        //
-        // completedMonths: January up to (not including) the current month.
-        //   • If month = 1 (January), no month has completed yet → completedMonths = 0.
-        //   • If month = 6 (June), completedMonths = 5 (Jan–May).
-        //
-        // maintAmountPerOwner: from active Maintenance config.
-        //   Uses ratePerSqFt if set (average approach: flat amount × owners is the
-        //   conservative fallback since per-owner sqFt varies; the admin can cross-check
-        //   with Maintenance List for exact per-owner breakdown).
-        //
-        // totalCollectedYTD: sum of all PAID payments from Jan to previousMonth,
-        //   fetched directly from DB via sumCollectedByYearUpToMonth().
-
         Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
         double maintAmountPerOwner = activeMaint
                 .map(m -> m.getAmount() != null ? m.getAmount().doubleValue() : 0.0)
@@ -120,7 +80,6 @@ public class PaymentController {
         double annualPendingDues;
 
         if (completedMonths == 0 || maintAmountPerOwner == 0.0) {
-            // No completed months yet (we're in January) or no maintenance configured
             totalExpectedYTD  = 0.0;
             totalCollectedYTD = 0.0;
             annualPendingDues = 0.0;
@@ -181,10 +140,6 @@ public class PaymentController {
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> submitPayment(
             @RequestBody PaymentRequest req, Authentication auth) {
         Resident r     = residentService.getByEmail(auth.getName());
-        // Route FM -> owner: maintenance belongs to the property (owner row).
-        // Storing under owner.getId() ensures pending-dues, dashboard, and
-        // maintenance-list queries (all keyed on owner resident_id) update
-        // automatically. For OWNER accounts this returns r unchanged.
         Resident owner = residentService.getEffectiveOwnerResident(r);
         PaymentResponseDTO p = paymentService.submitForVerification(owner.getId(), req);
         return ResponseEntity.ok(ApiResponse.success("Payment submitted for admin verification", p));
@@ -195,7 +150,6 @@ public class PaymentController {
     public ResponseEntity<List<PaymentResponseDTO>> getMyPayments(Authentication auth) {
         Resident r     = residentService.getByEmail(auth.getName());
         Resident owner = residentService.getEffectiveOwnerResident(r);
-        // Family Members see all payments for their linked flat/property
         return ResponseEntity.ok(paymentService.getResidentPayments(owner.getId()));
     }
 }

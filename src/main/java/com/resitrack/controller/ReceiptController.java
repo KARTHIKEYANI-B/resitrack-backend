@@ -51,7 +51,6 @@ public class ReceiptController {
     public ResponseEntity<List<ReceiptResponseDTO>> getMyReceipts(Authentication auth) {
         Resident r     = residentService.getByEmail(auth.getName());
         Resident owner = residentService.getEffectiveOwnerResident(r);
-        // Family members see all receipts for their linked flat/property
         return ResponseEntity.ok(receiptService.getResidentReceipts(owner.getId()));
     }
 

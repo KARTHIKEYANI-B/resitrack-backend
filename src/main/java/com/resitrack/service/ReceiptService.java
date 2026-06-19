@@ -162,7 +162,7 @@ public class ReceiptService {
             addDashedLine(doc);
 
             // ── Status stamp ───────────────────────────────────────
-            Paragraph status = new Paragraph("✓  VERIFIED & PAID", paidFont);
+            Paragraph status = new Paragraph("VERIFIED & PAID", paidFont);
             status.setAlignment(Element.ALIGN_CENTER);
             status.setSpacingBefore(6f);
             doc.add(status);

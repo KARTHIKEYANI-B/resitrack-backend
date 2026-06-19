@@ -66,22 +66,6 @@ public class MaintenanceService {
         maintenanceRepo.deleteById(id);
     }
 
-    // ── Core calculation: owner's maintenance amount ─────────────────────
-    //
-    // Formula: maintenanceAmount = ceil(owner.sqFt × ratePerSqFt)
-    // Fallback: use flat `amount` when ratePerSqFt is null or sqFt is missing.
-    //
-    // ROUNDING RULE: always round UP to the next whole rupee (CEILING).
-    //
-    //   Example: 723 sq.ft × ₹2.70/sq.ft = 1952.1  →  ₹1953
-    //   Example: 1000 sq.ft × ₹2.70/sq.ft = 2700.0  →  ₹2700  (whole number unchanged)
-    //
-    // Why CEILING instead of HALF_UP:
-    //   HALF_UP rounds 1952.1 → 1952, so a resident who pays ₹1952 (the
-    //   displayed amount) leaves a ₹0.10 pending balance and stays UNPAID.
-    //   CEILING always rounds fractional paise UP to the next whole rupee,
-    //   so the displayed amount equals the required amount exactly.
-
     public BigDecimal calculateAmountForResident(Maintenance m, Double sqFt) {
         if (m.getRatePerSqFt() != null
                 && m.getRatePerSqFt().compareTo(BigDecimal.ZERO) > 0
@@ -102,23 +86,6 @@ public class MaintenanceService {
                 .orElseThrow(() -> new CustomException(
                         "No active monthly maintenance configured", HttpStatus.NOT_FOUND));
     }
-
-    // ── Maintenance List ──────────────────────────────────────────────────
-    //
-    // GET /admin/maintenance/owner-list?year=YYYY&month=MM
-    //
-    // Returns per-owner maintenance status for the given month.
-    //
-    // STATUS RULES (authoritative — same rules used by Dashboard and Pending Dues):
-    //
-    //   paidAmount  = sumPaidAmountByPropertyAndPaymentMonth(owner.id, month)
-    //               = owner's own PAID payments + ALL linked FM PAID payments
-    //
-    //   pendingAmount = max(0, maintenanceAmount - paidAmount)
-    //
-    //   pendingAmount == 0               → PAID     (even if FM made the last payment)
-    //   pendingAmount >  0 AND paid > 0  → PARTIAL
-    //   paidAmount == 0                  → UNPAID
 
     public MaintenanceListDTO getOwnerMaintenanceList(int year, int month) {
         String paymentMonth = String.format("%d-%02d", year, month);
@@ -164,34 +131,6 @@ public class MaintenanceService {
                 .build();
     }
 
-    /**
-     * Builds per-owner DTOs for the Maintenance List.
-     *
-     * ═══════════════════════════════════════════════════════════════════════
-     * FAMILY MEMBER PAYMENT SYNCHRONIZATION
-     * ═══════════════════════════════════════════════════════════════════════
-     *
-     * sumPaidAmountByPropertyAndPaymentMonth(owner.id, month) aggregates:
-     *   1. Payments where p.resident.id == owner.id          (owner's own payments)
-     *   2. Payments where p.resident.ownerResidentId == owner.id  (FM payments)
-     *
-     * This means that when a Family Member makes a payment — even the FINAL
-     * payment that brings the balance to zero — it is counted at the property
-     * level.  pendingAmount becomes 0 and status becomes PAID automatically.
-     *
-     * ═══════════════════════════════════════════════════════════════════════
-     * STATUS DETERMINATION (authoritative)
-     * ═══════════════════════════════════════════════════════════════════════
-     *
-     *   pendingAmount = max(0, maintenanceAmount - paidAmount)
-     *
-     *   pendingAmount == 0               → "PAID"
-     *   pendingAmount >  0 AND paid > 0  → "PARTIAL"
-     *   paidAmount == 0                  → "UNPAID"
-     *
-     * The status label is the SOLE source of truth.  Callers must not use
-     * any other heuristic to determine payment status.
-     */
     private List<MaintenanceOwnerDTO> buildOwnerDTOs(
             List<Resident> owners, Maintenance maint, String paymentMonth) {
 
@@ -207,20 +146,9 @@ public class MaintenanceService {
                     ? BigDecimal.valueOf(paidRaw).setScale(2, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
 
-            // ── Pending = max(0, maintenance - paid) ─────────────────────
             BigDecimal pending = calcAmount.subtract(paidAmount).max(BigDecimal.ZERO);
 
-            // ── Status determination — ONLY from pendingAmount ────────────
-            //
-            // Rule 1: pendingAmount == 0  → PAID
-            //         (covers both fully paid and zero-amount cases)
-            //         This handles the case where the FINAL payment was made
-            //         by a Family Member.
-            //
-            // Rule 2: pendingAmount >  0 AND paidAmount > 0  → PARTIAL
-            //
-            // Rule 3: paidAmount == 0  → UNPAID
-            //         (no payments at all this month)
+
             final String status;
             if (pending.compareTo(BigDecimal.ZERO) == 0) {
                 status = "PAID";

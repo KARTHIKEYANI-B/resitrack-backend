@@ -126,16 +126,6 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
            "AND r.password <> '__DELETED__'")
     long countActiveFamilyMemberLogins();
 
-    /**
-     * Sum of registered family member counts across all active, approved owners.
-     *
-     * Each owner registers their total household size (including themselves) as
-     * {@code familyMembers}.  The family members count for population purposes =
-     * this total minus the owners themselves, so the caller subtracts totalOwners.
-     *
-     * COALESCE treats null familyMembers as 0 so owners who skipped the field
-     * do not break the aggregate.
-     */
     @Query("SELECT COALESCE(SUM(r.familyMembers), 0) FROM Resident r " +
            "WHERE r.residentRole = 'OWNER' " +
            "AND r.status = 'ACTIVE' " +

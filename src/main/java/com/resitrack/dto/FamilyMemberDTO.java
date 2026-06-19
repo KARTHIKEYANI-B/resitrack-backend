@@ -55,17 +55,17 @@ public class FamilyMemberDTO {
     @AllArgsConstructor
     @NoArgsConstructor
     public static class Request {
-        private String  name;         // required
-        private String  relationship; // required — FamilyMember.Relationship name
+        private String  name;         
+        private String  relationship; 
         private Integer age;
         private String  phone;
-        private String  email;        // contact email (optional)
+        private String  email;        
     }
     @Data
     @AllArgsConstructor
     @NoArgsConstructor
     public static class GrantAccessRequest {
-        private String loginEmail;    // email for logging in (required, must be unique)
-        private String password;      // initial password (required, min 8 chars)
+        private String loginEmail;    
+        private String password;      
     }
 }

@@ -162,7 +162,7 @@ public class NotificationService {
 
     public void notifyUserApproved(Resident r) {
         notifRepo.save(Notification.builder()
-                .title("Registration Approved ✓")
+                .title("Registration Approved")
                 .message("Welcome " + r.getFullName()
                         + "! Your registration for "
                         + (r.getPropertyType() != null ? r.getPropertyType().name() + " " : "")
@@ -219,7 +219,7 @@ public class NotificationService {
         Resident r = payment.getResident();
         if (r == null) return;
         notifRepo.save(Notification.builder()
-                .title("Payment Verified ✓")
+                .title("Payment Verified")
                 .message("Your payment of ₹" + payment.getAmount()
                         + " for " + (payment.getPaymentMonth() != null
                                 ? payment.getPaymentMonth() : "maintenance")
@@ -456,7 +456,7 @@ public class NotificationService {
             Payment payment, Resident resident) {
         if (resident == null) return;
         notifRepo.save(Notification.builder()
-                .title("Payment Verified ✓")
+                .title("Payment Verified")
                 .message("Your payment of ₹" + payment.getAmount()
                         + " for " + payment.getPaymentMonth()
                         + " has been verified by admin. Receipt generated."
