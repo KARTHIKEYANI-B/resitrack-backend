@@ -1,6 +1,7 @@
 package com.resitrack.service;
 
 import com.resitrack.entity.Expense;
+import com.resitrack.entity.Maintenance;
 import com.resitrack.entity.Payment;
 import com.resitrack.entity.Resident;
 import com.resitrack.repository.ExpenseRepository;
@@ -21,6 +22,7 @@ public class FinancialReportService {
     private final PaymentRepository  paymentRepo;
     private final ExpenseRepository  expenseRepo;
     private final ResidentRepository residentRepo;
+    private final MaintenanceService maintenanceService;
 
     private static final String[] MONTH_ABBR = {
         "Jan","Feb","Mar","Apr","May","Jun",
@@ -75,6 +77,10 @@ public class FinancialReportService {
         Map<String, BigDecimal> columnTotals = new LinkedHashMap<>();
         BigDecimal grandTotal = BigDecimal.ZERO;
 
+        // Fetch the active maintenance config once — same row used by the
+        // Maintenance Summary screen — instead of querying it per resident.
+        Maintenance activeMaint = maintenanceService.getActiveMaintenanceConfig().orElse(null);
+
         for (Resident r : residents) {
             Map<String, BigDecimal> resPayments = paymentMap.getOrDefault(r.getId(), Map.of());
 
@@ -96,7 +102,7 @@ public class FinancialReportService {
             row.put("ownerName",    r.getFullName());
             row.put("sqFt",         r.getSqFt() != null ? r.getSqFt() : 0);
             row.put("propertyType", r.getPropertyType() != null ? r.getPropertyType().name() : "FLAT");
-            row.put("maintValue",   getMonthlyMaintenance(r));
+            row.put("maintValue",   getMonthlyMaintenance(r, activeMaint));
             row.put("months",       rowMonths);
             row.put("total",        rowTotal);
             rows.add(row);
@@ -329,17 +335,33 @@ public class FinancialReportService {
     private double safe(Double v) { return v != null ? v : 0.0; }
     private long   safe(Long   v) { return v != null ? v : 0L; }
 
-    private BigDecimal getMonthlyMaintenance(Resident r) {
-        if (r.getSqFt() != null && r.getSqFt() > 0) {
-            return BigDecimal.valueOf(Math.round(r.getSqFt() * 2.5));
-        }
-        return BigDecimal.ZERO;
+    // Maintenance Amount — single source of truth.
+    //
+    // Previously this hardcoded a stale rate (sqFt × 2.5, HALF_UP rounding),
+    // which did not match the Maintenance Summary screen's calculation and
+    // caused the "Maint.Val" column in Financial Summary to show incorrect
+    // figures.
+    //
+    // Fixed to delegate to MaintenanceService, which is the authoritative
+    // source used by the Maintenance Summary screen (/admin/maintenance/owner-list):
+    //   - Uses the currently ACTIVE Maintenance config row
+    //     (MaintenanceService.getActiveMaintenanceConfig())
+    //   - Applies the exact same formula: ceil(sqFt × ratePerSqFt),
+    //     falling back to the configured flat `amount` when ratePerSqFt
+    //     or sqFt is unavailable (MaintenanceService.calculateAmountForResident()).
+    //
+    // Overload accepts a pre-fetched Maintenance config to avoid re-querying
+    // the database once per resident when used inside a loop.
+    private BigDecimal getMonthlyMaintenance(Resident r, Maintenance activeMaint) {
+        if (activeMaint == null) return BigDecimal.ZERO;
+        return maintenanceService.calculateAmountForResident(activeMaint, r.getSqFt());
     }
 
     private double estimatePendingDues(List<Resident> residents, int year, int upToMonth) {
+        Maintenance activeMaint = maintenanceService.getActiveMaintenanceConfig().orElse(null);
         double total = 0;
         for (Resident r : residents) {
-            BigDecimal maint = getMonthlyMaintenance(r);
+            BigDecimal maint = getMonthlyMaintenance(r, activeMaint);
             if (maint.compareTo(BigDecimal.ZERO) == 0) continue;
 
             double paid     = safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year, 1, upToMonth));
