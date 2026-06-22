@@ -45,6 +45,25 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(dashboardService.getUserStats(owner.getId())));
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // "My Monthly Maintenance Bill" (Owner Account)
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // SINGLE SOURCE OF TRUTH: DashboardService.getUserStats(residentId)
+    //
+    // This endpoint used to recompute the bill amount and payment status
+    // independently (using the flat global Maintenance.amount instead of the
+    // per-resident ratePerSqFt × sqFt formula, and a slightly different status
+    // derivation). That caused this page to show different numbers than the
+    // Dashboard, Maintenance Summary, Payment Management, and Financial Summary.
+    //
+    // Fix: reuse the exact same getUserStats(...) calculation that already
+    // powers the Owner Dashboard (GET /user/dashboard/stats) — which itself
+    // calls MaintenanceService.calculateAmountForResident(...), the same
+    // formula used by the Admin Maintenance List / Maintenance Summary. No
+    // maintenance calculation or payment logic is changed here; this endpoint
+    // simply stops duplicating that logic and reads it from the one place it
+    // is already computed correctly, so all screens stay in sync by construction.
     @GetMapping("/maintenance/current")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentMaintenance(Authentication auth) {
         Resident raw      = residentService.getByEmail(auth.getName());
@@ -54,72 +73,42 @@ public class UserController {
         int month = LocalDate.now().getMonthValue();
         String currentMonthStr = year + "-" + String.format("%02d", month);
 
+        // Same call the Owner Dashboard uses — guarantees identical figures.
+        Map<String, Object> stats = dashboardService.getUserStats(resident.getId());
+
         Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
 
         Map<String, Object> response = new LinkedHashMap<>();
 
-        if (activeMaint.isEmpty()) {
-            response.put("amount",          0.0);
-            response.put("dueDate",         null);
-            response.put("lateFee",         0.0);
-            response.put("lateFeeEnabled",  false);
-            response.put("lateFeeApplied",  false);
-            response.put("status",          "PENDING");
-            response.put("month",           formatMonthLabel(currentMonthStr));
-            response.put("paymentMonth",    currentMonthStr);
-            response.put("maintenanceId",   null);
-            return ResponseEntity.ok(ApiResponse.success(response));
-        }
+        double amount         = toDouble(stats.get("currentMonthDue"));
+        double lateFee        = toDouble(stats.get("lateFee"));
+        boolean lateFeeApplied = Boolean.TRUE.equals(stats.get("lateFeeApplied"));
+        String  dueDate        = (String) stats.get("dueDate");
+        String  status         = (String) stats.get("paymentStatus"); // PAID | PENDING_VERIFICATION | UNPAID
+        String  txnId          = (String) stats.get("transactionId");
 
-        Maintenance m = activeMaint.get();
-
-        Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(
-                resident.getId(), currentMonthStr);
-        double paidSoFar     = paidRaw != null ? paidRaw : 0.0;
-        double maintAmount   = m.getAmount() != null ? m.getAmount().doubleValue() : 0.0;
-        double pendingAmount = Math.max(0.0, maintAmount - paidSoFar);
-
-        String status;
-        String txnId = null;
-        if (pendingAmount < 0.005) {
-            status = "PAID";
-            txnId  = paymentRepo.findByResidentId(resident.getId()).stream()
-                    .filter(p -> currentMonthStr.equals(p.getPaymentMonth())
-                              && p.getPaymentStatus() == Payment.PaymentStatus.PAID)
-                    .max(Comparator.comparing(p -> p.getPaymentDate() != null
-                            ? p.getPaymentDate() : LocalDate.MIN))
-                    .map(Payment::getTransactionId)
-                    .orElse(null);
-        } else {
-            boolean hasPendingVerification = verificationRepo
-                    .existsPendingByResidentIdAndPaymentMonth(resident.getId(), currentMonthStr);
-            status = hasPendingVerification ? "PENDING_VERIFICATION" : "PENDING";
-        }
-
-        boolean lateFeeApplied = false;
-        double  lateFeeAmt     = 0.0;
-        if (Boolean.TRUE.equals(m.getLateFeeEnabled())
-                && m.getDueDate() != null
-                && LocalDate.now().isAfter(m.getDueDate())
-                && !"PAID".equals(status)) {
-            lateFeeApplied = true;
-            lateFeeAmt = m.getLateFee() != null ? m.getLateFee().doubleValue() : 0.0;
-        }
-
-        response.put("maintenanceId",   m.getId());
-        response.put("amount",          m.getAmount().doubleValue());
-        response.put("dueDate",         m.getDueDate() != null ? m.getDueDate().toString() : null);
-        response.put("lateFee",         m.getLateFee() != null ? m.getLateFee().doubleValue() : 0.0);
-        response.put("lateFeeEnabled",  m.getLateFeeEnabled());
+        response.put("maintenanceId",   activeMaint.map(Maintenance::getId).orElse(null));
+        response.put("amount",          amount);
+        response.put("dueDate",         dueDate);
+        response.put("lateFee",         lateFee);
+        response.put("lateFeeEnabled",  activeMaint.map(Maintenance::getLateFeeEnabled).orElse(false));
         response.put("lateFeeApplied",  lateFeeApplied);
-        response.put("lateFeeAmount",   lateFeeAmt);
-        response.put("status",          status);
+        response.put("lateFeeAmount",   lateFee);
+        response.put("status",          status != null ? status : "UNPAID");
         response.put("month",           formatMonthLabel(currentMonthStr));
         response.put("paymentMonth",    currentMonthStr);
         response.put("flatType",        resident.getFlatType());
         response.put("transactionId",   txnId);
+        response.put("paidAmount",      toDouble(stats.get("paidAmount")));
+        response.put("pendingAmount",   toDouble(stats.get("currentDue")));
 
         return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    private double toDouble(Object value) {
+        if (value == null) return 0.0;
+        if (value instanceof Number n) return n.doubleValue();
+        try { return Double.parseDouble(value.toString()); } catch (Exception e) { return 0.0; }
     }
 
     @GetMapping("/profile")
