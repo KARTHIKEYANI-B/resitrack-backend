@@ -2,6 +2,7 @@ package com.resitrack.service;
 
 import com.resitrack.dto.ResidentDTO;
 import com.resitrack.dto.FamilyMemberSummaryDTO;
+import com.resitrack.dto.VehicleDTO;
 import com.resitrack.entity.PropertyType;
 import com.resitrack.entity.Resident;
 import com.resitrack.entity.FamilyMember;
@@ -9,6 +10,7 @@ import com.resitrack.exception.CustomException;
 import com.resitrack.repository.FamilyMemberRepository;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.repository.VehicleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -22,10 +24,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ResidentService {
 
-    private final ResidentRepository residentRepo;
-    private final PaymentRepository  paymentRepo;
-    private final PhotoUploadService photoUploadService;
-    private final FamilyMemberRepository familyMemberRepo;
+    private final ResidentRepository      residentRepo;
+    private final PaymentRepository       paymentRepo;
+    private final PhotoUploadService      photoUploadService;
+    private final FamilyMemberRepository  familyMemberRepo;
+    private final VehicleRepository       vehicleRepo;
+    private final VehicleDocumentUploadService vehicleDocumentUploadService;
 
     // ── List queries ──────────────────────────────────────────────────────
 
@@ -264,6 +268,16 @@ public class ResidentService {
                 .buildingTaxDueDate(r.getBuildingTaxDueDate())
                 .taxesInsuranceReferenceNumber(r.getTaxesInsuranceReferenceNumber())
                 .taxesInsuranceDueDate(r.getTaxesInsuranceDueDate())
+                // ── Multiple Vehicles ──────────────────────────────────────
+                .vehicles(getVehiclesForResident(r.getId()))
                 .build();
+    }
+
+    private List<VehicleDTO.Response> getVehiclesForResident(Long residentId) {
+        return vehicleRepo.findByResidentIdAndActiveTrueOrderByCreatedAtAsc(residentId)
+                .stream()
+                .map(v -> VehicleDTO.Response.from(v,
+                        vehicleDocumentUploadService.toPublicUrl(v.getInsuranceDocumentPath())))
+                .collect(Collectors.toList());
     }
 }

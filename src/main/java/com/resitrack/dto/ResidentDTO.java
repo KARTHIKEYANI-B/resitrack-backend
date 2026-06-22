@@ -43,4 +43,8 @@ public class ResidentDTO {
 
     private String    taxesInsuranceReferenceNumber;
     private LocalDate taxesInsuranceDueDate;
+
+    // ── Multiple Vehicles (additive — legacy vehicleDetails field above is untouched) ──
+    @Builder.Default
+    private java.util.List<VehicleDTO.Response> vehicles = new java.util.ArrayList<>();
 }

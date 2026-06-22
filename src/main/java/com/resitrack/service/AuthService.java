@@ -6,11 +6,13 @@ import com.resitrack.entity.FamilyMember;
 import com.resitrack.entity.Resident;
 import com.resitrack.entity.Resident.RegistrationStatus;
 import com.resitrack.entity.SecurityGuard;
+import com.resitrack.entity.Vehicle;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.FamilyMemberRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.repository.SecurityGuardRepository;
+import com.resitrack.repository.VehicleRepository;
 import com.resitrack.security.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -27,13 +30,15 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AuthService {
 
-    private final AdminRepository         adminRepo;
-    private final ResidentRepository      residentRepo;
-    private final SecurityGuardRepository securityGuardRepo;   
-    private final FamilyMemberRepository  familyMemberRepo;    
-    private final PasswordEncoder         passwordEncoder;
-    private final JwtTokenProvider        jwtTokenProvider;
-    private final NotificationService     notificationService;
+    private final AdminRepository              adminRepo;
+    private final ResidentRepository           residentRepo;
+    private final SecurityGuardRepository      securityGuardRepo;   
+    private final FamilyMemberRepository       familyMemberRepo;    
+    private final VehicleRepository            vehicleRepo;
+    private final VehicleDocumentUploadService vehicleDocumentUploadService;
+    private final PasswordEncoder              passwordEncoder;
+    private final JwtTokenProvider             jwtTokenProvider;
+    private final NotificationService          notificationService;
 
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("dd-MMM-yyyy hh:mm a");
@@ -142,7 +147,7 @@ public class AuthService {
         return buildResidentResponse(r);
     }
 
-    // ── Self Registration (unchanged) ─────────────────────────────────────
+    // ── Self Registration (unchanged behavior; now also creates a Vehicle row) ──
     @Transactional
     public Resident register(RegisterRequest req) {
 
@@ -180,8 +185,94 @@ public class AuthService {
         try { builder.residentRole(Resident.ResidentRole.OWNER); } catch (Exception ignored) {}
 
         Resident saved = residentRepo.save(builder.build());
+
+        // ── Multiple Vehicles support ───────────────────────────────────────
+        // The legacy single "vehicleDetails" string on Resident is left exactly
+        // as-is for backward compatibility. In addition, if a vehicle number
+        // was supplied at registration, also create the first Vehicle row so
+        // it immediately shows up in "Owner Account → Settings → Vehicle /
+        // Insurance" once the owner is approved and logs in.
+        createVehicleIfPresent(saved, req.getVehicleDetails(), null);
+
         notifyAllAdmins(saved);
         return saved;
+    }
+
+    /**
+     * Same as {@link #register(RegisterRequest)} but additionally accepts an
+     * optional insurance document (image or PDF) for the vehicle supplied in
+     * the request. Used by the multipart registration endpoint so an owner
+     * can upload their insurance document for the vehicle in the same step,
+     * without requiring a separate authenticated call (the resident is not
+     * yet approved/active and therefore cannot log in to call /user/vehicles
+     * right after registering).
+     */
+    @Transactional
+    public Resident registerWithVehicleDocument(RegisterRequest req, MultipartFile insuranceDocument) {
+        if (insuranceDocument != null && !insuranceDocument.isEmpty()
+                && (req.getVehicleDetails() == null || req.getVehicleDetails().isBlank())) {
+            throw new CustomException(
+                    "Vehicle Number is required to attach an insurance document.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        if (residentRepo.existsByEmail(req.getEmail()))
+            throw new CustomException("Email is already registered.", HttpStatus.CONFLICT);
+
+        if (req.getPhone() != null && !req.getPhone().isBlank()
+                && residentRepo.existsByPhone(req.getPhone()))
+            throw new CustomException("Phone number is already registered.", HttpStatus.CONFLICT);
+
+        if (req.getFlatNumber() != null && !req.getFlatNumber().isBlank()
+                && residentRepo.existsByFlatNumber(req.getFlatNumber()))
+            throw new CustomException("Flat/Villa number is already registered.", HttpStatus.CONFLICT);
+
+        Resident.ResidentBuilder builder = Resident.builder()
+                .fullName(req.getFullName().trim())
+                .email(req.getEmail().trim().toLowerCase())
+                .phone(req.getPhone() != null ? req.getPhone().trim() : null)
+                .password(passwordEncoder.encode(req.getPassword()))
+                .flatNumber(req.getFlatNumber() != null
+                        ? req.getFlatNumber().trim().toUpperCase() : null)
+                .flatType(req.getFlatType())
+                .propertyType(req.getPropertyType())
+                .sqFt(req.getSqFt())
+                .familyMembers(req.getFamilyMembers())
+                .age(req.getAge())
+                .vehicleDetails(req.getVehicleDetails())
+                .address(req.getAddress())
+                .registrationStatus(RegistrationStatus.PENDING)
+                .isApproved(false)
+                .isActive(false)
+                .registered(false)
+                .status(Resident.ResidentStatus.INACTIVE);
+
+        try { builder.residentRole(Resident.ResidentRole.OWNER); } catch (Exception ignored) {}
+
+        Resident saved = residentRepo.save(builder.build());
+
+        createVehicleIfPresent(saved, req.getVehicleDetails(), insuranceDocument);
+
+        notifyAllAdmins(saved);
+        return saved;
+    }
+
+    private void createVehicleIfPresent(Resident owner, String vehicleNumber, MultipartFile insuranceDocument) {
+        if (vehicleNumber == null || vehicleNumber.isBlank()) return;
+
+        Vehicle.VehicleBuilder vBuilder = Vehicle.builder()
+                .resident(owner)
+                .vehicleNumber(vehicleNumber.trim().toUpperCase())
+                .active(true);
+
+        Vehicle vehicle = vehicleRepo.save(vBuilder.build());
+
+        if (insuranceDocument != null && !insuranceDocument.isEmpty()) {
+            String relativePath = vehicleDocumentUploadService.saveInsuranceDocument(insuranceDocument);
+            vehicle.setInsuranceDocumentPath(relativePath);
+            vehicle.setInsuranceDocumentName(insuranceDocument.getOriginalFilename());
+            vehicleRepo.save(vehicle);
+        }
     }
 
     // ── Registration status check (unchanged) ─────────────────────────────

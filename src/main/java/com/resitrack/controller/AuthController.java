@@ -40,10 +40,26 @@ public class AuthController {
         return ResponseEntity.ok(ApiResponse.success("Login successful", authService.securityLogin(req)));
     }
 
-    @PostMapping("/register")
+    @PostMapping(value = "/register", consumes = "application/json")
     public ResponseEntity<ApiResponse<RegistrationStatusDTO>> register(
             @Valid @RequestBody RegisterRequest req) {
         authService.register(req);
+        RegistrationStatusDTO status = authService.getRegistrationStatus(req.getEmail());
+        return ResponseEntity.ok(ApiResponse.success(
+                "Registration successful! Pending admin approval.", status));
+    }
+
+    // ── Registration with an inline vehicle insurance document upload ─────
+    // Additive endpoint: same fields as /auth/register, sent as multipart
+    // form-data, plus an optional "insuranceDocument" file part. Used by the
+    // registration page only when the owner enters a Vehicle Number and
+    // chooses to upload its insurance document during sign-up.
+    @PostMapping(value = "/register", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<RegistrationStatusDTO>> registerWithDocument(
+            @org.springframework.web.bind.annotation.RequestPart("data") @Valid RegisterRequest req,
+            @org.springframework.web.bind.annotation.RequestPart(value = "insuranceDocument", required = false)
+                    org.springframework.web.multipart.MultipartFile insuranceDocument) {
+        authService.registerWithVehicleDocument(req, insuranceDocument);
         RegistrationStatusDTO status = authService.getRegistrationStatus(req.getEmail());
         return ResponseEntity.ok(ApiResponse.success(
                 "Registration successful! Pending admin approval.", status));
