@@ -34,9 +34,9 @@ public class FinancialReportController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCollection(
             @RequestParam(defaultValue = "0") int year,
-            @RequestParam(defaultValue = "1") int startMonth,
-            @RequestParam(defaultValue = "12") int endMonth) {
-        if (year == 0) year = LocalDate.now().getYear();
+            @RequestParam(defaultValue = "4") int startMonth,
+            @RequestParam(defaultValue = "3") int endMonth) {
+        if (year == 0) year = currentFinancialYearStart();
         return ResponseEntity.ok(ApiResponse.success(
                 reportService.getCollectionMatrix(year, startMonth, endMonth)));
     }
@@ -78,7 +78,7 @@ public class FinancialReportController {
             @RequestParam(defaultValue = "0") int year,
             @RequestParam(defaultValue = "4") int startMonth,
             @RequestParam(defaultValue = "3") int endMonth) throws IOException {
-        if (year == 0) year = LocalDate.now().getYear();
+        if (year == 0) year = currentFinancialYearStart();
         Map<String, Object> data = reportService.getCollectionMatrix(year, startMonth, endMonth);
         byte[] pdf = buildCollectionPdf(data, year);
         return pdfResponse(pdf, "collection-report-" + year + ".pdf");
@@ -102,7 +102,7 @@ public class FinancialReportController {
             @RequestParam(defaultValue = "0") int year,
             @RequestParam(defaultValue = "4") int startMonth,
             @RequestParam(defaultValue = "3") int endMonth) throws IOException {
-        if (year == 0) year = LocalDate.now().getYear();
+        if (year == 0) year = currentFinancialYearStart();
         Map<String, Object> data = reportService.getCollectionMatrix(year, startMonth, endMonth);
         byte[] xlsx = buildCollectionExcel(data);
         return xlsxResponse(xlsx, "collection-report-" + year + ".xlsx");
@@ -218,7 +218,9 @@ public class FinancialReportController {
         // Header
         Paragraph title = new Paragraph(APARTMENT_NAME, titleFont);
         title.setAlignment(Element.ALIGN_CENTER); doc.add(title);
-        Paragraph sub = new Paragraph("COLLECTION STATEMENT — " + year, subtitleFont);
+        Object periodLabelObj = data.get("periodLabel");
+        String periodLabel = periodLabelObj != null ? periodLabelObj.toString() : String.valueOf(year);
+        Paragraph sub = new Paragraph("COLLECTION STATEMENT — " + periodLabel, subtitleFont);
         sub.setAlignment(Element.ALIGN_CENTER); doc.add(sub);
         Paragraph gen = new Paragraph("Generated: " + LocalDate.now().format(DateTimeFormatter.ofPattern("dd-MMM-yyyy")), normalFont);
         gen.setAlignment(Element.ALIGN_CENTER); doc.add(gen);
@@ -289,9 +291,9 @@ public class FinancialReportController {
         Color sumBg = new Color(245, 245, 245);
         addCell(summary, "Opening Balance",   boldFont, sumBg, Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("openingBalance")), normalFont, sumBg, Element.ALIGN_RIGHT);
-        addCell(summary, "Total Collected", boldFont, sumBg, Element.ALIGN_LEFT);
+        addCell(summary, "+ Total Collected", boldFont, sumBg, Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("totalCollected")), normalFont, sumBg, Element.ALIGN_RIGHT);
-        addCell(summary, "Total Expenses",  boldFont, sumBg, Element.ALIGN_LEFT);
+        addCell(summary, "- Total Expenses",  boldFont, sumBg, Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("totalExpenses")), normalFont, sumBg, Element.ALIGN_RIGHT);
         addCell(summary, "Closing Balance",   boldFont, new Color(220,220,220), Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("closingBalance")), boldFont, new Color(220,220,220), Element.ALIGN_RIGHT);
@@ -404,7 +406,9 @@ public class FinancialReportController {
             Row t1 = sheet.createRow(rowIdx++);
             Cell c1 = t1.createCell(0); c1.setCellValue(APARTMENT_NAME); c1.setCellStyle(titleStyle);
             Row t2 = sheet.createRow(rowIdx++);
-            Cell c2 = t2.createCell(0); c2.setCellValue("COLLECTION STATEMENT — " + data.get("year")); c2.setCellStyle(titleStyle);
+            Object periodLabelObj = data.get("periodLabel");
+            String periodLabel = periodLabelObj != null ? periodLabelObj.toString() : String.valueOf(data.get("year"));
+            Cell c2 = t2.createCell(0); c2.setCellValue("COLLECTION STATEMENT — " + periodLabel); c2.setCellStyle(titleStyle);
             Row t3 = sheet.createRow(rowIdx++);
             Cell c3 = t3.createCell(0); c3.setCellValue("Generated: " + LocalDate.now().format(DateTimeFormatter.ofPattern("dd-MMM-yyyy"))); c3.setCellStyle(dataStyle);
             rowIdx++; // blank
@@ -465,8 +469,8 @@ public class FinancialReportController {
 
             String[][] summary = {
                 {"Opening Balance", "₹ " + fmt(data.get("openingBalance"))},
-                {"Total Collected","₹ " + fmt(data.get("totalCollected"))},
-                {"Total Expenses", "₹ " + fmt(data.get("totalExpenses"))},
+                {"+ Total Collected","₹ " + fmt(data.get("totalCollected"))},
+                {"- Total Expenses", "₹ " + fmt(data.get("totalExpenses"))},
                 {"Closing Balance",  "₹ " + fmt(data.get("closingBalance"))},
                 {"Pending Dues",     "₹ " + fmt(data.get("pendingDues"))},
             };
@@ -569,6 +573,16 @@ public class FinancialReportController {
     }
     private void setCellNum(Row r, int col, double val, XSSFCellStyle s) {
         Cell c = r.createCell(col); c.setCellValue(val); c.setCellStyle(s);
+    }
+
+    // Current Financial Year start year (Apr → Mar convention), mirroring
+    // ResidentPaymentSummaryService.getCurrentFinancialYearStart(). Used
+    // only as the fallback when a Collection Statement request omits
+    // `year` entirely — the frontend always sends an explicit year, so this
+    // path is a defensive default, not part of the normal request flow.
+    private int currentFinancialYearStart() {
+        LocalDate now = LocalDate.now();
+        return now.getMonthValue() >= 4 ? now.getYear() : now.getYear() - 1;
     }
 
     private String fmt(Object v) {
