@@ -28,6 +28,10 @@ public interface PaymentVerificationRequestRepository
             @Param("residentId")   Long   residentId,
             @Param("paymentMonth") String paymentMonth);
 
+    /**
+     * Find all PENDING verification requests for a resident, ordered newest first.
+     * Used to show the PENDING_VERIFICATION status on the Current Maintenance page.
+     */
     @Query("SELECT r FROM PaymentVerificationRequest r " +
            "WHERE r.resident.id = :residentId " +
            "AND r.status        = 'PENDING' " +

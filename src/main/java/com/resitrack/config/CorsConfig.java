@@ -21,9 +21,6 @@ public class CorsConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
 
-        // Hardcoded defaults — always allowed regardless of env var.
-        // Add every Vercel preview/production URL here so the app works
-        // even when CORS_ALLOWED_ORIGINS is not set in the environment.
         List<String> origins = new ArrayList<>(List.of(
             "http://localhost:3000",
             "http://localhost:5173",

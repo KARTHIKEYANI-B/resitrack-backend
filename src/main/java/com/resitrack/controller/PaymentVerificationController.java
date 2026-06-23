@@ -32,6 +32,12 @@ public class PaymentVerificationController {
     private final ResidentService            residentService;
     private final AdminRepository            adminRepo;
 
+    // ── User: get active admins for CASH payment selection ───────────────
+
+    /**
+     * Returns all active admin accounts for the "Paid To" dropdown in CASH payments.
+     * Accessible by USER role so owners/family members can select the admin.
+     */
     @GetMapping("/user/payment-verification/active-admins")
     @PreAuthorize("hasRole('USER')")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getActiveAdmins() {
@@ -75,7 +81,9 @@ public class PaymentVerificationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Payment verification request submitted successfully", result));
     }
-    
+
+    // ── User: CASH — new submit ───────────────────────────────────────────
+
     @PostMapping(value = "/user/payment-verification/submit-cash",
                  consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasRole('USER')")

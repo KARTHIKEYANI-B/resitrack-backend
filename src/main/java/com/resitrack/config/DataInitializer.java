@@ -32,25 +32,16 @@ public class DataInitializer implements CommandLineRunner {
     private final MemberService              memberService;
     private final PasswordEncoder            passwordEncoder;
 
-    // ── Canonical account emails ──────────────────────────────────────────────
-    // These must match AdminAssignmentService.POSITION_EMAILS exactly.
-    // When adding a new position, update both places.
     private static final String SUPER_ADMIN_EMAIL    = "superadmin@gmail.com";
     private static final String SUPER_ADMIN_NAME     = "Super Admin";
     private static final String SUPER_ADMIN_PASSWORD = "Superadmin@123";
 
-    // Secondary Super Admin account — used for client demos and QA flow testing.
-    // Mirrors initSuperAdmin() exactly: same role, same permissions, same encoder.
-    // Must also be added to SUPER_ADMIN_EMAILS below or initSuperAdmin() will
-    // strip its superAdmin flag back to false on the next restart.
+
     private static final String TEST_SUPER_ADMIN_EMAIL    = "test@gmail.com";
     private static final String TEST_SUPER_ADMIN_NAME     = "Test Super Admin";
     private static final String TEST_SUPER_ADMIN_PASSWORD = "Test@123";
     private static final String TEST_SUPER_ADMIN_PHONE    = "9999999999";
 
-    // All emails that are allowed to hold is_super_admin = true.
-    // initSuperAdmin() demotes any OTHER admin row that has the flag set,
-    // so every canonical super-admin account must be listed here.
     private static final List<String> SUPER_ADMIN_EMAILS = List.of(
         SUPER_ADMIN_EMAIL,
         TEST_SUPER_ADMIN_EMAIL
@@ -92,6 +83,7 @@ public class DataInitializer implements CommandLineRunner {
         log.info("=== ResiTrack Data Initialization Complete ===");
     }
 
+
     @Transactional
     protected void purgeLegacyAccounts() {
         for (String email : LEGACY_EMAILS) {
@@ -101,8 +93,6 @@ public class DataInitializer implements CommandLineRunner {
             }
             Admin legacy = opt.get();
 
-            // Guard: skip if this account still has an active assignment
-            // (should never happen, but protects against accidental data loss)
             boolean hasActiveAssignment = assignmentRepo
                     .findByAdminIdAndActiveTrue(legacy.getId())
                     .isPresent();
@@ -156,21 +146,7 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    // ── Step 2b: Ensure secondary (test/demo) Super Admin account exists ──────
-    /**
-     * Creates a second, fully-equivalent Super Admin account for client demos
-     * and QA flow testing, identified by TEST_SUPER_ADMIN_EMAIL.
-     *
-     * Mirrors initSuperAdmin() exactly:
-     *  - Same builder shape, same PasswordEncoder (BCrypt, strength 12 — see
-     *    SecurityConfig.passwordEncoder()), same superAdmin=true flag.
-     *  - Idempotent: only creates the row if it doesn't already exist; never
-     *    touches the password of an existing account with this email (so if
-     *    someone later changes the password in-app, restarts won't revert it).
-     *  - position is left null — this account is not tied to a committee seat,
-     *    so it cannot collide with AdminAssignmentService's seat-holder logic.
-     *  - Does not modify, delete, or affect any other admin row.
-     */
+
     private void initTestSuperAdmin() {
         if (!adminRepo.existsByEmail(TEST_SUPER_ADMIN_EMAIL)) {
             Admin testSuperAdmin = Admin.builder()
@@ -192,7 +168,6 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    // ── Step 3: Ensure all position accounts exist (Secretary, VP, Joint Secretary, Treasurer) ─
     private void initDefaultPositionAccounts() {
         createPositionAccount(VICE_PRESIDENT_EMAIL, VICE_PRESIDENT_PASSWORD, VICE_PRESIDENT_NAME, Member.Position.VICE_PRESIDENT, false);
         createPositionAccount(SECRETARY_EMAIL,       SECRETARY_PASSWORD,       SECRETARY_NAME,       Member.Position.SECRETARY,       false);
@@ -224,7 +199,6 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    // ── Step 4: Default maintenance config ────────────────────────────────────
     private void initMaintenance() {
         if (maintenanceRepo.count() == 0) {
             Maintenance maintenance = Maintenance.builder()

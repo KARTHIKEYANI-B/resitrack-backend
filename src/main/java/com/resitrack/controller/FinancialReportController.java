@@ -289,9 +289,9 @@ public class FinancialReportController {
         Color sumBg = new Color(245, 245, 245);
         addCell(summary, "Opening Balance",   boldFont, sumBg, Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("openingBalance")), normalFont, sumBg, Element.ALIGN_RIGHT);
-        addCell(summary, "+ Total Collected", boldFont, sumBg, Element.ALIGN_LEFT);
+        addCell(summary, "Total Collected", boldFont, sumBg, Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("totalCollected")), normalFont, sumBg, Element.ALIGN_RIGHT);
-        addCell(summary, "- Total Expenses",  boldFont, sumBg, Element.ALIGN_LEFT);
+        addCell(summary, "Total Expenses",  boldFont, sumBg, Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("totalExpenses")), normalFont, sumBg, Element.ALIGN_RIGHT);
         addCell(summary, "Closing Balance",   boldFont, new Color(220,220,220), Element.ALIGN_LEFT);
         addCell(summary, "₹ " + fmt(data.get("closingBalance")), boldFont, new Color(220,220,220), Element.ALIGN_RIGHT);
@@ -465,8 +465,8 @@ public class FinancialReportController {
 
             String[][] summary = {
                 {"Opening Balance", "₹ " + fmt(data.get("openingBalance"))},
-                {"+ Total Collected","₹ " + fmt(data.get("totalCollected"))},
-                {"- Total Expenses", "₹ " + fmt(data.get("totalExpenses"))},
+                {"Total Collected","₹ " + fmt(data.get("totalCollected"))},
+                {"Total Expenses", "₹ " + fmt(data.get("totalExpenses"))},
                 {"Closing Balance",  "₹ " + fmt(data.get("closingBalance"))},
                 {"Pending Dues",     "₹ " + fmt(data.get("pendingDues"))},
             };

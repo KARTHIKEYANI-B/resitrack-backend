@@ -21,6 +21,12 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     private final ResidentRepository      residentRepository;
     private final SecurityGuardRepository securityGuardRepository;
 
+    /**
+     * Called by JwtAuthenticationFilter on every authenticated request.
+     * The username is always an email address (the JWT subject).
+     * We check in the same priority order as unifiedLogin:
+     *   Admin → Security → Resident
+     */
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
 

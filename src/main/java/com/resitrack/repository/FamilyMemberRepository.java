@@ -41,6 +41,12 @@ public interface FamilyMemberRepository extends JpaRepository<FamilyMember, Long
 
     List<FamilyMember> findByResidentIdAndActiveTrue(Long residentId);
 
+    // ── Family-member personal contact lookups (used for login fallback) ──
+    // These let us find a Family Member by their personal contact email/phone
+    // (stored in family_members.email / family_members.phone) when app access
+    // has been granted — so we can resolve the linked Resident login account
+    // (via userId) and allow login with the personal email, not just the
+    // separate login email stored in residents.email.
 
     Optional<FamilyMember> findByEmailAndHasAppAccessTrue(String email);
 

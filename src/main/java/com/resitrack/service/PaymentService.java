@@ -141,7 +141,7 @@ public class PaymentService {
                 .paymentMethod(payment.getPaymentMethod())
                 .transactionId(payment.getTransactionId())
                 .apartmentName("R R Dhurya Owners Welfare Association")
-                .receiptFooter("Thank you for your payment. This is a computer-generated receipt.")
+                .receiptFooter("Thank you for your payment.")
                 .build();
 
         receiptRepo.save(receipt);

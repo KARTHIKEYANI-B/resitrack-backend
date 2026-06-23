@@ -71,7 +71,7 @@ public class MemberController {
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
         if (!isSuperAdminSafe(admin)) {
             throw new CustomException(
-                    "Only SUPER ADMIN can manage committee members", HttpStatus.FORBIDDEN);
+                    "Only SUPER_ADMIN can manage committee members", HttpStatus.FORBIDDEN);
         }
     }
 

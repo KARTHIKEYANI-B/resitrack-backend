@@ -59,6 +59,16 @@ public class MemberDTO {
         private LocalDate joinedDate;
         private boolean   active = true;
 
+        /**
+         * Task 2: password for the position admin account.
+         * Populated only by Super Admin via the Members List form.
+         * When non-blank: the position admin account password is updated to this value.
+         * When blank / null: existing password is preserved (no change).
+         * Never echoed back in responses.
+         *
+         * Lombok @Data generates getAdminPassword() / setAdminPassword(String)
+         * which MemberService.applyAdminPasswordIfProvided() depends on.
+         */
         private String adminPassword;
     }
 

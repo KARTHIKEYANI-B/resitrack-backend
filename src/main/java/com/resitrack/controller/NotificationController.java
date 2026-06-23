@@ -31,6 +31,7 @@ public class NotificationController {
     public ResponseEntity<List<Notification>> getAdminNotifs(Authentication auth) {
         Admin admin = adminRepo.findByEmail(auth.getName()).orElse(null);
         if (admin == null) {
+            // Fallback: return all (should not happen in a valid session)
             return ResponseEntity.ok(notifService.getAllForAdmin());
         }
         return ResponseEntity.ok(notifService.getAllForAdmin(admin.getId(), admin.isSuperAdmin()));

@@ -49,6 +49,13 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            // ── CORS ──────────────────────────────────────────────────────
+            // withDefaults() tells Spring Security to delegate CORS handling
+            // to the CorsFilter bean defined in CorsConfig.java.
+            // Without this line, Spring Security intercepts OPTIONS preflight
+            // requests before CorsFilter runs, returning a 403 with no
+            // CORS headers — which the browser reports as a CORS error even
+            // though the real issue is Spring Security blocking the request.
             .cors(withDefaults())
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

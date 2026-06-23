@@ -30,18 +30,28 @@ public class SecurityController {
     private final AdminRepository         adminRepo;
     private final NotificationRepository  notifRepo;
 
+    // ══════════════════════════════════════════════════════════════════════
+    // ADMIN → VIEW endpoints  (all Admin roles can read)
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** All admins can list security accounts (read-only view). */
     @GetMapping("/admin/security")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<List<SecurityGuardDTO.Response>>> listGuards() {
         return ResponseEntity.ok(ApiResponse.success(securityService.getAll()));
     }
 
+    /** All admins can fetch a single security account (read-only view). */
     @GetMapping("/admin/security/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<SecurityGuardDTO.Response>> getGuard(
             @PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(securityService.getById(id)));
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ADMIN → MANAGE endpoints  (Super Admin / President only)
+    // ══════════════════════════════════════════════════════════════════════
 
     @PostMapping("/admin/security")
     @PreAuthorize("hasRole('ADMIN')")
@@ -106,6 +116,10 @@ public class SecurityController {
         return ResponseEntity.ok(ApiResponse.success("Message sent", notifRepo.save(notif)));
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // SECURITY endpoints  (logged-in security guard)
+    // ══════════════════════════════════════════════════════════════════════
+
     @GetMapping("/security/residents")
     @PreAuthorize("hasRole('SECURITY')")
     public ResponseEntity<ApiResponse<List<SecurityResidentDTO>>> getResidents() {
@@ -165,6 +179,13 @@ public class SecurityController {
         return ResponseEntity.ok(ApiResponse.success("Message sent", notifRepo.save(notif)));
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    /**
+     * Enforces Super Admin / President access.
+     * President accounts have superAdmin=true in the DB (set by AdminAssignmentService.appoint),
+     * so isSuperAdmin() returns true for both the system Super Admin and the appointed President.
+     */
     private void requireSuperAdmin(Authentication auth) {
         Admin admin = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));

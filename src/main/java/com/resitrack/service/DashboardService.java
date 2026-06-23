@@ -195,6 +195,8 @@ public class DashboardService {
                         + (p.getLateFeeAmount() != null ? p.getLateFeeAmount().doubleValue() : 0.0))
                 .orElse(0.0);
 
+        // Use property-level paid sum for user dashboard too
+        // (residentId here is always the owner after FM→owner resolution in the controller)
         Double totalPaidThisMonth = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(
                 residentId, currentMonth);
         totalPaidThisMonth = totalPaidThisMonth == null ? 0.0 : totalPaidThisMonth;
@@ -217,12 +219,25 @@ public class DashboardService {
         com.resitrack.entity.Maintenance activeMaintEntity =
                 maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true).orElse(null);
 
+        // ── Per-resident maintenance amount (Admin → Maintenance List source of truth) ──
+        //
+        // Look up the owner's sq.ft and call calculateAmountForResident(), which is the
+        // exact same method used by the Admin Maintenance List to produce each owner's
+        // displayed amount.  This ensures the user dashboard "Current Month Due" always
+        // matches what admin sees on the Maintenance List page.
+        //
+        // When ratePerSqFt is configured:  amount = ceil(owner.sqFt × ratePerSqFt)
+        // When no ratePerSqFt (fixed amount mode): amount = maintenance.amount
+        //
+        // residentId here is always the owner's id (FM→owner resolution happens in the
+        // controller before calling this method).
         double currentDueAmount = 0.0;
         double lateFee          = 0.0;
         String dueDate          = null;
         boolean lateFeeApplied  = false;
 
         if (activeMaintEntity != null) {
+            // Resolve the per-resident amount using the same calculation as Admin Maintenance List
             try {
                 com.resitrack.entity.Resident owner = residentRepo.findById(residentId).orElse(null);
                 Double ownerSqFt = owner != null ? owner.getSqFt() : null;
@@ -230,6 +245,7 @@ public class DashboardService {
                         maintenanceService.calculateAmountForResident(activeMaintEntity, ownerSqFt);
                 currentDueAmount = calcAmount != null ? calcAmount.doubleValue() : 0.0;
             } catch (Exception e) {
+                // Fall back to the stored base amount if calculation fails for any reason
                 currentDueAmount = activeMaintEntity.getAmount() != null
                         ? activeMaintEntity.getAmount().doubleValue() : 0.0;
             }

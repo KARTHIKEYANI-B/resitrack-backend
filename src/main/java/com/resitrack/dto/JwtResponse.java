@@ -31,8 +31,10 @@ public class JwtResponse {
         private String flatType;
         private String propertyType;
 
+        // ADMIN extras
         private boolean superAdmin;         
 
+        // FAMILY_MEMBER extras
         private String residentRole;        
         private Long   ownerResidentId;     
         private Long   familyMemberId;      

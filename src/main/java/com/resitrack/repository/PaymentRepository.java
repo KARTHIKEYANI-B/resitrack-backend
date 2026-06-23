@@ -54,7 +54,23 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
            "AND p.paymentMonth = :paymentMonth")
     Double sumCashPaidByPaymentMonth(@Param("paymentMonth") String paymentMonth);
 
-
+    /**
+     * Property-level paid sum for a given month.
+     *
+     * Sums PAID payments for the owner AND all Family Members whose
+     * resident row has owner_resident_id = ownerResidentId.
+     *
+     * Written as native SQL (nativeQuery = true) because Hibernate 6
+     * (Spring Boot 3.x) does NOT support SpEL #{T(...)} inside JPQL
+     * @Query — that syntax only works with nativeQuery = true.
+     * Using plain SQL 'PAID' is safe because paymentStatus is stored as
+     * a VARCHAR via @Enumerated(EnumType.STRING).
+     *
+     * Returns 0.0 (never NULL) via COALESCE.
+     *
+     * @param ownerResidentId  The OWNER's resident_id (never a FM id)
+     * @param paymentMonth     e.g. "2025-06"
+     */
     @Query(value =
            "SELECT COALESCE(SUM(p.amount), 0) " +
            "FROM payments p " +
@@ -66,8 +82,13 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
            nativeQuery = true)
     Double sumPaidAmountByPropertyAndPaymentMonth(
             @Param("ownerResidentId") Long ownerResidentId,
-                @Param("paymentMonth")    String paymentMonth);
-                
+            @Param("paymentMonth")    String paymentMonth);
+
+    /**
+     * Original single-resident paid sum — used only for user-facing queries
+     * (payment history, user dashboard) where only one resident's own
+     * payments are needed.
+     */
     @Query("SELECT COALESCE(SUM(p.amount), 0) FROM Payment p " +
            "WHERE p.resident.id = :residentId " +
            "AND p.paymentStatus = 'PAID' " +
