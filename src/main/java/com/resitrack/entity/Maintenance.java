@@ -21,6 +21,15 @@ public class Maintenance {
     @Column(nullable = false)
     private String maintenanceType;
 
+    // Nullable by design: a NULL propertyType marks the legacy,
+    // property-agnostic shared-rate row (applies to both Flat and Villa
+    // owners) that MaintenanceService falls back to when no property-specific
+    // (FLAT or VILLA) active row has been configured yet — see
+    // getActiveMaintenanceConfig(PropertyType) in MaintenanceService.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "property_type")
+    private PropertyType propertyType;
+
     @Column(name = "rate_per_sq_ft", precision = 10, scale = 4)
     private BigDecimal ratePerSqFt;
 

@@ -35,10 +35,12 @@ public class MaintenanceService {
         return maintenanceRepo.findAll();
     }
 
+    @Transactional
     public Maintenance create(MaintenanceRequest req) {
         BigDecimal amount = resolveAmount(req);
         Maintenance m = Maintenance.builder()
                 .maintenanceType(req.getMaintenanceType() != null ? req.getMaintenanceType() : "Monthly")
+                .propertyType(req.getPropertyType())
                 .ratePerSqFt(req.getRatePerSqFt())
                 .amount(amount)
                 .dueDate(req.getDueDate())
@@ -46,19 +48,55 @@ public class MaintenanceService {
                 .lateFeeEnabled(req.isLateFeeEnabled())
                 .active(true)          // always set explicitly to prevent null
                 .build();
-        return maintenanceRepo.save(m);
+        Maintenance saved = maintenanceRepo.save(m);
+
+        // ── FIX: only ONE active row per property type at a time ───────────
+        // Root cause of "Villa rate showing for Flat owners": creating a new
+        // rate config never deactivated any previously-active row of the
+        // SAME property type. If two active rows ever shared the same
+        // propertyType (e.g. the admin left the Property Type dropdown on
+        // its default value while entering the other property's rate),
+        // "most recently created wins" was an undocumented, fragile
+        // assumption with no guardrail. Deactivating siblings of the SAME
+        // property type makes "which row is active" unambiguous, and never
+        // touches the OTHER property type's active row.
+        if (saved.getPropertyType() != null) {
+            deactivateOtherActiveRowsOfSameType(saved);
+        }
+        return saved;
     }
 
+    @Transactional
     public Maintenance update(Long id, MaintenanceRequest req) {
         Maintenance m = maintenanceRepo.findById(id)
                 .orElseThrow(() -> new CustomException("Maintenance not found", HttpStatus.NOT_FOUND));
         m.setMaintenanceType(req.getMaintenanceType());
+        m.setPropertyType(req.getPropertyType());
         m.setRatePerSqFt(req.getRatePerSqFt());
         m.setAmount(resolveAmount(req));
         m.setDueDate(req.getDueDate());
         if (req.getLateFee() != null) m.setLateFee(BigDecimal.valueOf(req.getLateFee()));
         m.setLateFeeEnabled(req.isLateFeeEnabled());
-        return maintenanceRepo.save(m);
+        Maintenance saved = maintenanceRepo.save(m);
+
+        if (Boolean.TRUE.equals(saved.getActive()) && saved.getPropertyType() != null) {
+            deactivateOtherActiveRowsOfSameType(saved);
+        }
+        return saved;
+    }
+
+    // Deactivates every OTHER active row that shares this row's propertyType
+    // (never the other property type), so exactly one active row exists per
+    // property type going forward. Idempotent — safe to call repeatedly.
+    private void deactivateOtherActiveRowsOfSameType(Maintenance keep) {
+        List<Maintenance> sameType =
+                maintenanceRepo.findActiveByPropertyTypeOrderByCreatedAtDesc(keep.getPropertyType());
+        for (Maintenance other : sameType) {
+            if (!other.getId().equals(keep.getId())) {
+                other.setActive(false);
+                maintenanceRepo.save(other);
+            }
+        }
     }
 
     public void delete(Long id) {
@@ -114,6 +152,70 @@ public class MaintenanceService {
         return maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
     }
 
+    // ── Flat/Villa separate rates ────────────────────────────────────────
+    //
+    // Resolves the active Maintenance row to use for a given property type:
+    //   1. Prefer an active row whose propertyType exactly matches (a FLAT
+    //      owner gets the FLAT-rate row, a VILLA owner gets the VILLA-rate
+    //      row — "apply it only to FLAT/VILLA owners").
+    //   2. Fall back to the legacy property-agnostic active row (propertyType
+    //      IS NULL) for backward compatibility, so residents continue to be
+    //      billed correctly even before an admin has configured separate
+    //      Flat/Villa rates.
+    //
+    // This is the single chokepoint every consumer (Maintenance Summary,
+    // Financial Summary, Owner/Family Member Dashboard, Monthly Maintenance
+    // Bill) should call instead of getActiveMaintenanceConfig() once a
+    // resident's property type is known.
+    @Transactional
+    public Optional<Maintenance> getActiveMaintenanceConfig(PropertyType propertyType) {
+        if (propertyType != null) {
+            List<Maintenance> matches =
+                    maintenanceRepo.findActiveByPropertyTypeOrderByCreatedAtDesc(propertyType);
+            if (!matches.isEmpty()) {
+                Maintenance picked = matches.get(0);
+
+                // ── Self-heal on read ────────────────────────────────────────
+                // If more than one row is currently active for this property
+                // type (e.g. leftover bad data from before the create()/
+                // update() guardrail existed, or from any other path that
+                // bypassed it), deactivate every row except the newest right
+                // now — don't wait for the admin to save a config again
+                // before the correct single-active-row state takes effect.
+                // This makes the fix visible immediately on the very next
+                // Maintenance Summary / Dashboard / Financial Summary read,
+                // not just on the next write.
+                if (matches.size() > 1) {
+                    for (int i = 1; i < matches.size(); i++) {
+                        Maintenance stale = matches.get(i);
+                        stale.setActive(false);
+                        maintenanceRepo.save(stale);
+                    }
+                }
+
+                // Defensive sanity check: the query already filters on
+                // m.propertyType = :propertyType, but this assertion makes
+                // it structurally impossible for a mismatched row to ever
+                // silently flow through — fail loudly instead of billing a
+                // resident with the wrong property type's rate.
+                if (picked.getPropertyType() != propertyType) {
+                    throw new IllegalStateException(
+                            "Maintenance rate lookup returned propertyType=" + picked.getPropertyType()
+                            + " for requested propertyType=" + propertyType + " (id=" + picked.getId() + ")");
+                }
+                return Optional.of(picked);
+            }
+        }
+        // Legacy fallback: the property-agnostic shared row, if any.
+        return maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true)
+                .filter(m -> m.getPropertyType() == null);
+    }
+
+    /** Convenience overload — resolves the active config directly from a Resident. */
+    public Optional<Maintenance> getActiveMaintenanceConfigFor(Resident r) {
+        return getActiveMaintenanceConfig(r != null ? r.getPropertyType() : null);
+    }
+
     // ── Maintenance List ──────────────────────────────────────────────────
     //
     // GET /admin/maintenance/owner-list?year=YYYY&month=MM
@@ -135,15 +237,25 @@ public class MaintenanceService {
         String paymentMonth = String.format("%d-%02d", year, month);
         String monthLabel   = buildMonthLabel(year, month);
 
-        Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
-        BigDecimal ratePerSqFt = activeMaint.map(Maintenance::getRatePerSqFt).orElse(null);
-        BigDecimal flatAmount  = activeMaint.map(Maintenance::getAmount).orElse(BigDecimal.ZERO);
+        // ── FIX: separate active rate config per property type ──────────────
+        // Previously a single activeMaint row (no property-type filter) was
+        // used for BOTH flat and villa owners. Now each property type
+        // resolves its own active row (falling back to the legacy shared
+        // row if no property-specific one is configured yet), so "Apply it
+        // only to FLAT owners" / "Apply it only to VILLA owners" holds even
+        // when the two rates differ.
+        Optional<Maintenance> activeFlatMaint  = getActiveMaintenanceConfig(PropertyType.FLAT);
+        Optional<Maintenance> activeVillaMaint = getActiveMaintenanceConfig(PropertyType.VILLA);
+
+        BigDecimal flatRatePerSqFt  = activeFlatMaint.map(Maintenance::getRatePerSqFt).orElse(null);
+        BigDecimal villaRatePerSqFt = activeVillaMaint.map(Maintenance::getRatePerSqFt).orElse(null);
+        BigDecimal flatAmount  = activeFlatMaint.map(Maintenance::getAmount).orElse(BigDecimal.ZERO);
 
         List<Resident> flatOwners  = residentRepo.findActiveNonDeletedByPropertyType(PropertyType.FLAT);
         List<Resident> villaOwners = residentRepo.findActiveNonDeletedByPropertyType(PropertyType.VILLA);
 
-        List<MaintenanceOwnerDTO> flatDTOs  = buildOwnerDTOs(flatOwners,  activeMaint.orElse(null), paymentMonth);
-        List<MaintenanceOwnerDTO> villaDTOs = buildOwnerDTOs(villaOwners, activeMaint.orElse(null), paymentMonth);
+        List<MaintenanceOwnerDTO> flatDTOs  = buildOwnerDTOs(flatOwners,  activeFlatMaint.orElse(null),  paymentMonth);
+        List<MaintenanceOwnerDTO> villaDTOs = buildOwnerDTOs(villaOwners, activeVillaMaint.orElse(null), paymentMonth);
 
         BigDecimal totalFlat  = flatDTOs.stream()
                 .map(MaintenanceOwnerDTO::getMaintenanceAmount)
@@ -161,7 +273,9 @@ public class MaintenanceService {
         return MaintenanceListDTO.builder()
                 .paymentMonth(paymentMonth)
                 .monthLabel(monthLabel)
-                .ratePerSqFt(ratePerSqFt)
+                .ratePerSqFt(flatRatePerSqFt)          // kept for backward compatibility (= flat rate)
+                .flatRatePerSqFt(flatRatePerSqFt)
+                .villaRatePerSqFt(villaRatePerSqFt)
                 .flatAmount(flatAmount)
                 .flatOwners(flatDTOs)
                 .villaOwners(villaDTOs)

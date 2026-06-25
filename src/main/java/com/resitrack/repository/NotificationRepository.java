@@ -77,6 +77,24 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
             @Param("type") Notification.NotificationType type,
             @Param("date") LocalDate date);
 
+    // ── Used only by NotificationService.notifyAdminNewRegistration's
+    // duplicate guard. Unlike existsByTargetResidentIdAndTypeAndCreatedAtDate
+    // above (shared with ReminderSchedulerService and not recipient-scoped),
+    // this also filters by recipientRole so a same-day USER-facing
+    // "Registration Approved"/"Registration Not Approved" notification
+    // (also type=REGISTRATION) can never be mistaken for an existing
+    // ADMIN-facing "New Registration Request" alert.
+    @Query("SELECT COUNT(n) > 0 FROM Notification n " +
+           "WHERE n.targetResidentId = :residentId " +
+           "AND n.type = :type " +
+           "AND n.recipientRole = :recipientRole " +
+           "AND FUNCTION('DATE', n.createdAt) = :date")
+    boolean existsByTargetResidentIdAndTypeAndRecipientRoleAndCreatedAtDate(
+            @Param("residentId") Long residentId,
+            @Param("type") Notification.NotificationType type,
+            @Param("recipientRole") String recipientRole,
+            @Param("date") LocalDate date);
+
     @Query("SELECT COUNT(n) > 0 FROM Notification n " +
            "WHERE n.targetResidentId = :residentId " +
            "AND n.type = :type " +

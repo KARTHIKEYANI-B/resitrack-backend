@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.List;
 
 @Service
@@ -132,6 +133,20 @@ public class NotificationService {
     }
 
     public void notifyAdminNewRegistration(Resident r) {
+        // ── Defensive duplicate guard ────────────────────────────────────
+        // A resident registers exactly once, so an ADMIN-facing REGISTRATION
+        // notification already existing for this residentId today means
+        // this is a duplicate call (e.g. a retried request) — skip creating
+        // a second row rather than relying solely on the call site being
+        // correct. Scoped to recipientRole="ADMIN" so this can never be
+        // fooled by the separate USER-facing "Registration Approved" /
+        // "Registration Not Approved" notifications below, which also use
+        // type=REGISTRATION but are sent to the resident, not admins.
+        if (notifRepo.existsByTargetResidentIdAndTypeAndRecipientRoleAndCreatedAtDate(
+                r.getId(), Notification.NotificationType.REGISTRATION, "ADMIN", LocalDate.now())) {
+            return;
+        }
+
         notifRepo.save(Notification.builder()
                 .title("New Registration Request")
                 .message("New resident registration: " + r.getFullName()

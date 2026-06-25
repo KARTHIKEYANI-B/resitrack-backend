@@ -10,6 +10,8 @@ public class MaintenanceListDTO {
     private String     paymentMonth;            
     private String     monthLabel;              
     private BigDecimal ratePerSqFt;             
+    private BigDecimal flatRatePerSqFt;
+    private BigDecimal villaRatePerSqFt;
     private BigDecimal flatAmount;            
 
     private List<MaintenanceOwnerDTO> flatOwners;
