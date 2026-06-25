@@ -1,5 +1,6 @@
 package com.resitrack.service;
 
+import com.resitrack.dto.AdminPaymentRequest;
 import com.resitrack.dto.PaymentRequest;
 import com.resitrack.dto.PaymentResponseDTO;
 import com.resitrack.entity.*;
@@ -118,6 +119,132 @@ public class PaymentService {
     public List<PaymentResponseDTO> getResidentPayments(Long residentId) {
         return paymentRepo.findByResidentIdOrderByCreatedAtDesc(residentId)
                 .stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
+    }
+
+    /**
+     * Admin Manual Payment Registration — POST /admin/payments
+     *
+     * Lets an Admin/Super Admin record a monthly maintenance payment on
+     * behalf of an owner (e.g. cash collected in person, a bank transfer
+     * confirmed outside the app) without that owner ever submitting it
+     * themselves.
+     *
+     * RESIDENT LOOKUP: by phone (unique column) — the frontend collects
+     * ownerName for display/confirmation only; phone is the actual key,
+     * so a typo'd name never blocks a legitimate payment for the right
+     * person while still catching a wrong/unregistered number.
+     *
+     * VERIFICATION:
+     *   verifiedByAdmin = true  → paymentStatus=PAID, verificationStatus=VERIFIED,
+     *                             receipt generated immediately (same as approvePayment()).
+     *   verifiedByAdmin = false → paymentStatus=PENDING_VERIFICATION,
+     *                             verificationStatus=PENDING, awaits the normal
+     *                             approve/reject flow — unchanged from today.
+     *
+     * DUPLICATE PREVENTION: one PAID payment per (resident, paymentMonth).
+     * Mirrors the existing existsByResidentIdAndPaymentMonthAndPaymentStatus
+     * check already used elsewhere in the codebase — does not touch Maintenance
+     * Batch payments (separate batch_payments table/flow, untouched here).
+     *
+     * adminCreated = true distinguishes this row from owner-submitted
+     * payments everywhere downstream (Maintenance Summary, Financial Summary,
+     * Dashboard, Payment Management all read straight from the payments table
+     * on each request, so no extra "refresh" wiring is needed once the row
+     * exists with the correct status/date/month).
+     */
+    @Transactional
+    public PaymentResponseDTO registerAdminPayment(AdminPaymentRequest req) {
+        if (req.getOwnerPhone() == null || req.getOwnerPhone().isBlank())
+            throw new CustomException("Owner phone number is required", HttpStatus.BAD_REQUEST);
+        if (req.getPaidAmount() == null || req.getPaidAmount().compareTo(BigDecimal.ZERO) <= 0)
+            throw new CustomException("Payment amount must be greater than zero", HttpStatus.BAD_REQUEST);
+        if (req.getPaymentMonth() == null || req.getPaymentMonth().isBlank())
+            throw new CustomException("Billing month is required", HttpStatus.BAD_REQUEST);
+        if (req.getPaymentDate() == null)
+            throw new CustomException("Payment date is required", HttpStatus.BAD_REQUEST);
+
+        if (req.getPaymentMode() != null) {
+            String mode = req.getPaymentMode().toUpperCase();
+            if (!VALID_PAYMENT_MODES.contains(mode))
+                throw new CustomException("Invalid payment method. Use: UPI, BANK_TRANSFER, CASH", HttpStatus.BAD_REQUEST);
+        }
+
+        Resident resident = residentRepo.findByPhone(req.getOwnerPhone().trim())
+                .orElseThrow(() -> new CustomException(
+                        "No registered resident found with this phone number", HttpStatus.NOT_FOUND));
+
+        // Route Family Member -> owner, same as the owner self-pay flow, so
+        // the payment always lands on the property's owner record and is
+        // picked up by every owner_resident_id-keyed query (Maintenance
+        // Summary, Pending Dues, Dashboard).
+        if (resident.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER
+                && resident.getOwnerResidentId() != null) {
+            resident = residentRepo.findById(resident.getOwnerResidentId()).orElse(resident);
+        }
+
+        // Never create a second PAID record for the same resident + month.
+        if (paymentRepo.existsByResidentIdAndPaymentMonthAndPaymentStatus(
+                resident.getId(), req.getPaymentMonth(), Payment.PaymentStatus.PAID)) {
+            throw new CustomException(
+                    "This owner already has a PAID payment recorded for " + req.getPaymentMonth(),
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
+
+        String txnId = (req.getTransactionId() != null && !req.getTransactionId().isBlank())
+                ? req.getTransactionId().trim()
+                : "ADMIN-" + System.currentTimeMillis();
+
+        String year = String.valueOf(req.getPaymentMonth().split("-")[0]);
+
+        // Best-effort link to the currently active Maintenance config for this
+        // resident's property type, purely for traceability/reporting — the
+        // admin-entered paidAmount is always the amount actually recorded,
+        // never recalculated or overridden from this row.
+        Maintenance maint = getActiveMaintenanceConfigForResident(resident);
+
+        Payment p = Payment.builder()
+                .resident(resident)
+                .maintenance(maint)
+                .amount(req.getPaidAmount())
+                .lateFeeAmount(BigDecimal.ZERO)
+                .paymentDate(verified ? req.getPaymentDate() : null)
+                .paymentMethod(req.getPaymentMode())
+                .transactionId(txnId)
+                .submittedResidentName(req.getOwnerName())
+                .paymentStatus(verified ? Payment.PaymentStatus.PAID : Payment.PaymentStatus.PENDING_VERIFICATION)
+                .verificationStatus(verified ? Payment.VerificationStatus.VERIFIED : Payment.VerificationStatus.PENDING)
+                .paymentMonth(req.getPaymentMonth())
+                .paymentYear(year)
+                .description(req.getDescription())
+                .adminCreated(true)
+                .build();
+
+        paymentRepo.save(p);
+
+        if (verified) {
+            generateReceipt(p);
+            notificationService.sendPaymentApprovedNotification(p);
+        } else {
+            notificationService.sendPaymentVerificationRequest(p);
+        }
+
+        return PaymentResponseDTO.from(p);
+    }
+
+    /** Mirrors MaintenanceService.getActiveMaintenanceConfigFor(Resident) without
+     *  introducing a cross-service dependency — same fallback rule: prefer the
+     *  resident's own property-type rate, fall back to the legacy shared row. */
+    private Maintenance getActiveMaintenanceConfigForResident(Resident resident) {
+        if (resident.getPropertyType() != null) {
+            List<Maintenance> matches = maintenanceRepo
+                    .findActiveByPropertyTypeOrderByCreatedAtDesc(resident.getPropertyType());
+            if (!matches.isEmpty()) return matches.get(0);
+        }
+        return maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true)
+                .filter(m -> m.getPropertyType() == null)
+                .orElse(null);
     }
 
     private void generateReceipt(Payment payment) {

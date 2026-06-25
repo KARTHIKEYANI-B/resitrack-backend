@@ -34,6 +34,27 @@ public class PaymentController {
     }
 
     /**
+     * POST /admin/payments — Admin Manual Payment Registration.
+     *
+     * Lets an Admin/Super Admin record a monthly maintenance payment on an
+     * owner's behalf (cash collected in person, a bank transfer confirmed
+     * outside the app, etc.). Matches the frontend's
+     * adminAPI.createAdminPayment(data) call in PaymentTracking.jsx, which
+     * was previously POSTing to this exact path with no matching mapping —
+     * hence "Request method 'POST' is not supported".
+     */
+    @PostMapping("/admin/payments")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<PaymentResponseDTO>> createAdminPayment(
+            @RequestBody AdminPaymentRequest req) {
+        PaymentResponseDTO p = paymentService.registerAdminPayment(req);
+        String message = Boolean.TRUE.equals(req.getVerifiedByAdmin())
+                ? "Payment recorded and verified"
+                : "Payment recorded, pending verification";
+        return ResponseEntity.ok(ApiResponse.success(message, p));
+    }
+
+    /**
      * GET /admin/payments/tracking-stats
      *
      * Task 1 — corrected Pending Dues formula:
