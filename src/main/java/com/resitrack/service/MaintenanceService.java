@@ -27,6 +27,7 @@ public class MaintenanceService {
     private final MaintenanceBatchRepository batchRepo;
     private final PaymentRepository          paymentRepo;
     private final ResidentRepository         residentRepo;
+    private final BatchPaymentRepository     batchPaymentRepo;
 
     // ── Basic CRUD ────────────────────────────────────────────────────────
 
@@ -288,7 +289,6 @@ public class MaintenanceService {
         String paymentMonth = String.format("%d-%02d",
                 req.getDueDate().getYear(),
                 req.getDueDate().getMonthValue());
-        String paymentYear = String.valueOf(req.getDueDate().getYear());
 
         String assignedFlatsDisplay = buildAssignedFlatsDisplay(req, residents);
         MaintenanceBatch batch = MaintenanceBatch.builder()
@@ -308,42 +308,73 @@ public class MaintenanceService {
                 .build();
         batch = batchRepo.save(batch);
 
-        Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
-
-        int assigned = 0;
-        String batchDesc = "BATCH-" + batch.getId() + ": " + req.getTitle();
-        for (Resident r : residents) {
-            if (paymentRepo.existsByResidentIdAndPaymentMonth(r.getId(), paymentMonth)) continue;
-
-            BigDecimal residentAmount = activeMaint
-                    .map(m -> calculateAmountForResident(m, r.getSqFt()))
-                    .orElse(req.getAmount());
-
-            BigDecimal lateFee = req.isPenaltyEnabled() && req.getPenaltyAmount() != null
-                    ? req.getPenaltyAmount() : BigDecimal.ZERO;
-
-            Payment payment = Payment.builder()
-                    .resident(r)
-                    .amount(residentAmount)
-                    .lateFeeAmount(lateFee)
-                    .paymentStatus(Payment.PaymentStatus.PENDING)
-                    .paymentMonth(paymentMonth)
-                    .paymentYear(paymentYear)
-                    .description(batchDesc)
-                    .build();
-            paymentRepo.save(payment);
-            assigned++;
-        }
-
-        batch.setTotalAssigned(assigned);
+        // ── FIX: Maintenance Batch assignment is now fully independent of
+        // regular monthly maintenance.
+        //
+        // The old code below this point used to loop over matched residents
+        // and write rows into the shared monthly `payments` table, SKIPPING
+        // any resident who already had a payment row for that calendar
+        // month (paymentRepo.existsByResidentIdAndPaymentMonth(...)). That
+        // meant a resident who had already PAID their monthly maintenance
+        // (and therefore already had a payments row for the month) was
+        // silently excluded from the batch — e.g. with 27 total owners and
+        // 7 already paid for the month, only the 20 unpaid owners got a
+        // batch obligation, and `totalAssigned` reflected only those 20.
+        //
+        // Maintenance Batch assignment must never be filtered by, or write
+        // into, the monthly maintenance ledger at all. Every resident
+        // matched by findMatchingResidents() (ALL / BLOCK / VILLA_GROUP /
+        // FLAT_GROUP / INDIVIDUAL) receives the batch obligation regardless
+        // of their monthly maintenance payment status — that's what
+        // createBatchPaymentRecords() below does, writing exclusively to
+        // the independent `batch_payments` ledger.
+        batch.setTotalAssigned(residents.size());
         batchRepo.save(batch);
+
+        // ── Maintenance Batch Dues — the ONLY place batch obligations are
+        // recorded. One BatchPayment row per resident matched above, using
+        // the batch's OWN amount (req.getAmount()), with no dependency on
+        // monthly maintenance payment status whatsoever. This is what
+        // powers the resident-facing "Maintenance Batch Dues" section and
+        // the admin "Paid List" / paid-unpaid counts.
+        createBatchPaymentRecords(batch, residents, req.getAmount());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("batchId",       batch.getId());
-        result.put("totalAssigned", assigned);
+        result.put("totalAssigned", residents.size());
         result.put("paymentMonth",  paymentMonth);
         result.put("title",         batch.getTitle());
         return result;
+    }
+
+    /**
+     * Creates a BatchPayment (UNPAID) row for every resident matched by the
+     * batch's assignment rule, then persists the batch's initial paid/unpaid
+     * counts. Idempotent per (batch, resident) via the unique constraint on
+     * batch_payments — safe even if called more than once for the same batch.
+     */
+    private void createBatchPaymentRecords(MaintenanceBatch batch, List<Resident> residents, BigDecimal amount) {
+        BigDecimal dueAmount = amount != null && amount.compareTo(BigDecimal.ZERO) > 0
+                ? amount : batch.getAmount();
+
+        for (Resident r : residents) {
+            if (batchPaymentRepo.existsByBatchIdAndResidentId(batch.getId(), r.getId())) continue;
+
+            BatchPayment bp = BatchPayment.builder()
+                    .batch(batch)
+                    .resident(r)
+                    .amount(dueAmount)
+                    .status(BatchPayment.BatchPaymentStatus.UNPAID)
+                    .build();
+            batchPaymentRepo.save(bp);
+        }
+
+        batchPaymentRepo.flush();
+        long paid   = batchPaymentRepo.countPaidByBatchId(batch.getId());
+        long unpaid = batchPaymentRepo.countUnpaidByBatchId(batch.getId());
+        batch.setPaidCount((int) paid);
+        batch.setUnpaidCount((int) unpaid);
+        batchRepo.save(batch);
     }
 
     public MaintenanceBatch updateBatchStatus(Long id, String status) {
@@ -353,14 +384,26 @@ public class MaintenanceService {
         return batchRepo.save(batch);
     }
 
+    @Transactional
     public void deleteBatch(Long id) {
         if (!batchRepo.existsById(id))
             throw new CustomException("Batch not found", HttpStatus.NOT_FOUND);
+        // Clean up this batch's own payment ledger first (FK to maintenance_batches).
+        // Does not touch the regular `payments` table at all.
+        batchPaymentRepo.deleteByBatchId(id);
         batchRepo.deleteById(id);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
 
+    // NOTE on Family Members: this returns one row per PROPERTY (the Owner
+    // resident — residentRepo.findByIsApprovedTrueAndStatus only returns
+    // OWNER rows by query design). A Maintenance Batch bills the property
+    // once; any Family Member with login access to that property can view
+    // and pay the same BatchPayment record on the Owner's behalf (see
+    // BatchPaymentController/getEffectiveOwnerResident), so "all assigned
+    // owners/family members receive the batch amount" without double-billing
+    // a single flat/villa.
     private List<Resident> findMatchingResidents(MaintenanceBatchRequest req) {
         List<Resident> all = residentRepo
                 .findByIsApprovedTrueAndStatus(Resident.ResidentStatus.ACTIVE);
@@ -419,8 +462,16 @@ public class MaintenanceService {
                 batch.getDueDate().getYear(),
                 batch.getDueDate().getMonthValue());
 
-        long paid    = paymentRepo.countPaidByPaymentMonth(paymentMonth);
-        long pending = paymentRepo.countPendingByPaymentMonth(paymentMonth);
+        // ── FIX: previously read from paymentRepo.countPaidByPaymentMonth(...)
+        // / countPendingByPaymentMonth(...), which counted ALL `payments` rows
+        // for the calendar month — including regular monthly maintenance —
+        // not just this batch. paidCount/unpaidCount are now persisted columns
+        // on MaintenanceBatch, maintained exclusively from `batch_payments`
+        // rows scoped to this batch's own id (see BatchPaymentService /
+        // createBatchPaymentRecords), so they can never include any other
+        // batch's or the monthly maintenance's payment records.
+        long paid    = batch.getPaidCount()   != null ? batch.getPaidCount()   : 0;
+        long pending = batch.getUnpaidCount() != null ? batch.getUnpaidCount() : 0;
 
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id",             batch.getId());
@@ -441,6 +492,7 @@ public class MaintenanceService {
         map.put("createdAt",      batch.getCreatedAt());
         return map;
     }
+
 
     private BigDecimal resolveAmount(MaintenanceRequest req) {
         if (req.getAmount() != null && req.getAmount() > 0)

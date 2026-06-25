@@ -29,16 +29,7 @@ public class ResidentPaymentDetailController {
 
     private final ResidentPaymentSummaryService residentPaymentSummaryService;
 
-    /**
-     * GET /admin/resident-payment-detail?fyStartYear=2025
-     *
-     * fyStartYear is optional — defaults to the current financial year
-     * (the calendar year in which the current FY's April falls).
-     *
-     * Returns: financial year metadata, resident rows (name, flat/villa
-     * number, month-wise paid amounts — blank/null when unpaid, row total),
-     * column totals per month, and the grand total.
-     */
+
     @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getResidentPaymentDetail(

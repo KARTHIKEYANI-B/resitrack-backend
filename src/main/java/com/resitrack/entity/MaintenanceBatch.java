@@ -57,11 +57,20 @@ public class MaintenanceBatch {
     @Column(nullable = false)
     private Integer totalAssigned = 0;
 
-    @Transient
-    private Integer totalPaid;
+    // ── Persisted, batch-scoped payment counters ───────────────────────────
+    // FIX: these used to be @Transient and were populated by a query that
+    // counted ALL payments() for the calendar month — including regular
+    // monthly maintenance — not just payments belonging to this batch.
+    // They are now real columns, updated exclusively by BatchPaymentService
+    // whenever a BatchPayment row for this batch changes status, so the
+    // counts can ONLY ever reflect this specific batch's own payment records.
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer paidCount = 0;
 
-    @Transient
-    private Integer totalPending;
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer unpaidCount = 0;
 
     @CreationTimestamp
     private LocalDateTime createdAt;
