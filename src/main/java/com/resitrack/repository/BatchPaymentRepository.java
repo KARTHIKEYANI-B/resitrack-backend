@@ -50,4 +50,12 @@ public interface BatchPaymentRepository extends JpaRepository<BatchPayment, Long
     @Modifying
     @Query("DELETE FROM BatchPayment bp WHERE bp.batch.id = :batchId")
     void deleteByBatchId(@Param("batchId") Long batchId);
+
+    // ── Admin → Payment Management unified transaction ledger ──────────────
+    // All PAID batch payments across every batch, newest verified first.
+    // Purely additive read query — does not affect the per-batch paid/unpaid
+    // counts, Payment Verification, or any other existing batch-payment flow.
+    @Query("SELECT bp FROM BatchPayment bp WHERE bp.status = 'PAID' " +
+           "ORDER BY bp.verifiedDate DESC, bp.createdAt DESC")
+    List<BatchPayment> findAllPaidOrderByVerifiedDateDesc();
 }

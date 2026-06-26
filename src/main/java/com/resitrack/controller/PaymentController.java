@@ -180,6 +180,23 @@ public class PaymentController {
         return ResponseEntity.ok(ApiResponse.success(stats));
     }
 
+    /**
+     * GET /admin/payments/transactions
+     *
+     * Admin → Payment Management unified transaction ledger: owner monthly
+     * maintenance payments (PAID) + maintenance batch payments (PAID) +
+     * expense records, combined into one list sorted by transaction date
+     * descending (latest first), with a sequential serialNo. Purely additive
+     * — reads existing data only, does not affect tracking-stats, approve/
+     * reject, Payment Verification, Maintenance Summary, Financial Summary,
+     * or the Dashboard.
+     */
+    @GetMapping("/admin/payments/transactions")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<List<TransactionLedgerEntryDTO>>> getTransactionLedger() {
+        return ResponseEntity.ok(ApiResponse.success(paymentService.getTransactionLedger()));
+    }
+
     @PutMapping("/admin/payments/{id}/approve")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> approvePayment(@PathVariable Long id) {

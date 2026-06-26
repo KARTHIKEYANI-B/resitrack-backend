@@ -152,6 +152,27 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             @Param("startMonth") int startMonth,
             @Param("endMonth") int endMonth);
 
+    /**
+     * Same intent as findByStatusAndYearRange, but the range bound is the
+     * BILLING month (p.paymentMonth, e.g. "2026-05") rather than the
+     * calendar month a payment happened to be collected/verified in
+     * (p.paymentDate). Used by Resident Paid/Unpaid Detail so that two
+     * installments paid for the SAME bill always land in the same matrix
+     * cell even if they were collected on different calendar dates —
+     * p.paymentMonth never changes between installments of one bill, while
+     * p.paymentDate can (e.g. a partial payment collected late next month).
+     *
+     * Safe to compare as a plain string BETWEEN: paymentMonth is always
+     * zero-padded "YYYY-MM", so lexicographic and chronological ordering
+     * agree (e.g. "2026-01" < "2026-02" < ... < "2026-12" < "2027-01").
+     */
+    @Query("SELECT p FROM Payment p WHERE p.paymentStatus = :status " +
+           "AND p.paymentMonth BETWEEN :startMonth AND :endMonth")
+    List<Payment> findByStatusAndPaymentMonthRange(
+            @Param("status") Payment.PaymentStatus status,
+            @Param("startMonth") String startMonth,
+            @Param("endMonth") String endMonth);
+
     @Query("SELECT SUM(p.amount) FROM Payment p WHERE p.paymentStatus = 'PAID' " +
            "AND YEAR(p.paymentDate) = :year AND MONTH(p.paymentDate) BETWEEN :startMonth AND :endMonth")
     Double sumPaidAmountByYearRange(

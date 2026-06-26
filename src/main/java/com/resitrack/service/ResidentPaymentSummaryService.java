@@ -20,22 +20,42 @@ import java.util.stream.Collectors;
  *
  * DATA SOURCE (per task requirement #1 / #6):
  * This service intentionally does NOT introduce any new payment-status
- * logic, resident-eligibility logic, or amount calculation. It reuses the
- * exact same building blocks already used by Dashboard, Maintenance
- * Summary, Financial Summary, and Payment Management:
+ * logic or resident-eligibility logic. It reuses the same building block
+ * already used by Dashboard, Maintenance Summary, Financial Summary, and
+ * Payment Management for resident scope:
  *
  *   - Resident scope:   ResidentRepository.findAllActiveApprovedOwners()
  *                        (same scope used by FinancialReportService.getCollectionMatrix())
- *   - Payment records:  PaymentRepository.findByStatusAndYearRange(PAID, ...)
- *                        (same query used by FinancialReportService.getCollectionMatrix())
- *   - Monthly grouping: payments are grouped by paymentDate's year-month,
- *                        multiple partial PAID payments in the same month
- *                        are summed — identical grouping rule already used
- *                        by getCollectionMatrix().
  *
- * No new totals are independently computed; totals are derived by summing
- * the same per-resident, per-month figures shown in the table, so they can
- * never drift from Financial Summary's "Maint.Val"/collection figures.
+ * MONTHLY GROUPING — fixed to group by BILLING month, not collection date:
+ *
+ *   Each column on this screen represents a billing month (the month a
+ *   resident owed maintenance for), so every payment must be grouped by
+ *   p.paymentMonth (e.g. "2026-05") — the stable field set once when a
+ *   payment is first submitted/recorded and carried through to its PAID
+ *   Payment row regardless of when it's actually verified.
+ *
+ *   p.paymentDate (when the money was actually collected/verified) is a
+ *   DIFFERENT concept and can legitimately differ between two partial
+ *   installments of the very same bill — e.g. ₹3040 collected and verified
+ *   on the 2nd of the month, then a ₹2 remaining-balance top-up collected
+ *   and verified a few days later. Both share paymentMonth="2026-05", but
+ *   grouping by paymentDate's calendar month could split them into
+ *   different cells (or even different columns) if verification happened
+ *   to land in different calendar months, making the column show only the
+ *   most recently-collected installment instead of the bill's total.
+ *   Financial Summary's own collection ledger intentionally still groups
+ *   by paymentDate (that report tracks cash flow timing, a different
+ *   question) — this screen answers "how much has this owner paid toward
+ *   each month's bill," which paymentMonth answers directly and
+ *   paymentDate does not. Financial Summary itself is unchanged.
+ *
+ *   Multiple PAID payments sharing one paymentMonth are summed (BigDecimal
+ *   add), supporting any number of partial/installment payments.
+ *
+ * No new totals are independently computed beyond this fix; row totals and
+ * column totals are still derived purely by summing the same per-resident,
+ * per-month figures shown in the table.
  */
 @Service
 @RequiredArgsConstructor
@@ -82,34 +102,9 @@ public class ResidentPaymentSummaryService {
                 .sorted(Comparator.comparing(r -> r.getFlatNumber() != null ? r.getFlatNumber() : ""))
                 .collect(Collectors.toList());
 
-        // ── Same PAID-payment query/grouping as getCollectionMatrix() ────
-        // Apr (fyStartYear) → Mar (fyStartYear + 1): a cross-calendar-year
-        // range, handled exactly like getCollectionMatrix()'s cross-year branch.
-        List<Payment> aprToDecPayments = paymentRepo.findByStatusAndYearRange(
-                Payment.PaymentStatus.PAID, fyStartYear, FY_START_MONTH, 12);
-        List<Payment> janToMarPayments = paymentRepo.findByStatusAndYearRange(
-                Payment.PaymentStatus.PAID, fyStartYear + 1, 1, FY_END_MONTH);
-
-        List<Payment> allPayments = new ArrayList<>(aprToDecPayments.size() + janToMarPayments.size());
-        allPayments.addAll(aprToDecPayments);
-        allPayments.addAll(janToMarPayments);
-
-        // Group: residentId -> (yyyy-MM -> summed PAID amount).
-        // Multiple partial PAID payments in the same month are summed here,
-        // identical to getCollectionMatrix()'s BigDecimal::add merge.
-        Map<Long, Map<String, BigDecimal>> paymentMap = new HashMap<>();
-        for (Payment p : allPayments) {
-            if (p.getPaymentDate() == null) continue;
-            Long   resId    = p.getResident().getId();
-            String monthKey = p.getPaymentDate().getYear() + "-"
-                    + String.format("%02d", p.getPaymentDate().getMonthValue());
-            paymentMap
-                .computeIfAbsent(resId, k -> new LinkedHashMap<>())
-                .merge(monthKey, p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO,
-                       BigDecimal::add);
-        }
-
-        // ── Build the 12 FY month columns: Apr..Dec (fyStartYear), Jan..Mar (fyStartYear+1) ──
+        // ── Build the 12 FY month columns first: Apr..Dec (fyStartYear), Jan..Mar (fyStartYear+1) ──
+        // Built before fetching payments because the fetch range below is
+        // expressed directly in terms of these same billing-month keys.
         List<String> monthKeys   = new ArrayList<>();
         List<String> monthLabels = new ArrayList<>();
         for (int m = FY_START_MONTH; m <= 12; m++) {
@@ -119,6 +114,31 @@ public class ResidentPaymentSummaryService {
         for (int m = 1; m <= FY_END_MONTH; m++) {
             monthKeys.add((fyStartYear + 1) + "-" + String.format("%02d", m));
             monthLabels.add(MONTH_ABBR[m - 1]);
+        }
+        Set<String> monthKeySet = new HashSet<>(monthKeys);
+
+        // ── Fetch every PAID payment whose BILLING month falls in this FY ──
+        // monthKeys is already ordered Apr(fyStartYear) .. Mar(fyStartYear+1),
+        // so the first and last entries are exactly the lexicographic bounds
+        // a string BETWEEN needs ("2026-04" ... "2027-03").
+        List<Payment> allPayments = paymentRepo.findByStatusAndPaymentMonthRange(
+                Payment.PaymentStatus.PAID, monthKeys.get(0), monthKeys.get(monthKeys.size() - 1));
+
+        // Group: residentId -> (billing month "yyyy-MM" -> summed PAID amount).
+        // Multiple partial/installment PAID payments sharing the same
+        // paymentMonth are summed here via BigDecimal::add — this is the fix:
+        // grouping by the stable billing month (not the collection date)
+        // guarantees every installment of one bill lands in the same cell.
+        Map<Long, Map<String, BigDecimal>> paymentMap = new HashMap<>();
+        for (Payment p : allPayments) {
+            if (p.getResident() == null) continue; // defensive — should never happen for a real payment row
+            String monthKey = p.getPaymentMonth();
+            if (monthKey == null || !monthKeySet.contains(monthKey)) continue; // defensive bound check
+            Long resId = p.getResident().getId();
+            paymentMap
+                .computeIfAbsent(resId, k -> new LinkedHashMap<>())
+                .merge(monthKey, p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO,
+                       BigDecimal::add);
         }
 
         // ── Build rows: one per resident, blank (null) cell for unpaid months ──
@@ -134,9 +154,9 @@ public class ResidentPaymentSummaryService {
             Map<String, Object> rowMonths = new LinkedHashMap<>();
 
             for (String key : monthKeys) {
-                BigDecimal amt = resPayments.get(key); // null if no PAID payment that month
+                BigDecimal amt = resPayments.get(key); // null if no PAID payment for that billing month
                 if (amt != null && amt.compareTo(BigDecimal.ZERO) > 0) {
-                    rowMonths.put(key, amt);                 // show actual paid total
+                    rowMonths.put(key, amt);                 // show actual cumulative paid total
                     rowTotal = rowTotal.add(amt);
                     columnTotals.merge(key, amt, BigDecimal::add);
                 } else {

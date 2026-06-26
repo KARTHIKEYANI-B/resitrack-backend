@@ -3,6 +3,7 @@ package com.resitrack.service;
 import com.resitrack.dto.AdminPaymentRequest;
 import com.resitrack.dto.PaymentRequest;
 import com.resitrack.dto.PaymentResponseDTO;
+import com.resitrack.dto.TransactionLedgerEntryDTO;
 import com.resitrack.entity.*;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.*;
@@ -13,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -21,12 +24,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class PaymentService {
 
-    private final PaymentRepository     paymentRepo;
-    private final ResidentRepository    residentRepo;
-    private final MaintenanceRepository maintenanceRepo;
-    private final MaintenanceService    maintenanceService;
-    private final ReceiptRepository     receiptRepo;
-    private final NotificationService   notificationService;
+    private final PaymentRepository      paymentRepo;
+    private final ResidentRepository     residentRepo;
+    private final MaintenanceRepository  maintenanceRepo;
+    private final MaintenanceService     maintenanceService;
+    private final ReceiptRepository      receiptRepo;
+    private final NotificationService    notificationService;
+    private final ExpenseRepository      expenseRepo;
+    private final BatchPaymentRepository batchPaymentRepo;
 
     private static final List<String> VALID_PAYMENT_MODES = List.of("UPI", "BANK_TRANSFER", "CASH");
 
@@ -124,6 +129,110 @@ public class PaymentService {
     public List<PaymentResponseDTO> getResidentPayments(Long residentId) {
         return paymentRepo.findByResidentIdOrderByCreatedAtDesc(residentId)
                 .stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
+    }
+
+    /**
+     * Admin → Payment Management unified transaction ledger.
+     *
+     * Combines three EXISTING, read-only data sources into one date-sorted
+     * list — it creates no new financial records and changes nothing about
+     * how income or expenses are calculated elsewhere:
+     *
+     *   INCOME  — every owner monthly maintenance Payment with
+     *             paymentStatus = PAID (paymentDate is the transaction date)
+     *   INCOME  — every BatchPayment with status = PAID
+     *             (verifiedDate, falling back to submittedDate, as the
+     *             transaction date — a batch payment only reaches PAID once
+     *             an admin verifies it, exactly like the regular flow)
+     *   EXPENSE — every Expense record (expenseDate as the transaction date)
+     *
+     * "Other income records" has no concrete source in this codebase — there
+     * is no separate Income entity — so only the two PAID-payment sources
+     * above are included; nothing is hardcoded or invented.
+     *
+     * Sorted by date descending (latest first) as required; serialNo is
+     * assigned 1..N after sorting. This method does not touch, call, or
+     * duplicate any Financial Summary / Dashboard / Maintenance Summary /
+     * Payment Verification logic — it only reads already-persisted rows.
+     */
+    @Transactional
+    public List<TransactionLedgerEntryDTO> getTransactionLedger() {
+        List<TransactionLedgerEntryDTO> entries = new ArrayList<>();
+
+        // ── Income: owner monthly maintenance payments (PAID only) ────────
+        for (Payment p : paymentRepo.findByPaymentStatus(Payment.PaymentStatus.PAID)) {
+            Resident r = p.getResident();
+            LocalDate txnDate = p.getPaymentDate(); // PAID rows always have a paymentDate (set on approve/verify)
+            if (txnDate == null) continue; // defensive — should not happen for PAID rows
+
+            entries.add(TransactionLedgerEntryDTO.builder()
+                    .date(txnDate)
+                    .type("INCOME")
+                    .category("Monthly Maintenance")
+                    .description(p.getDescription() != null && !p.getDescription().isBlank()
+                            ? p.getDescription() : "Monthly maintenance payment")
+                    .residentName(r != null ? r.getFullName() : p.getSubmittedResidentName())
+                    .flatNumber(r != null ? r.getFlatNumber() : null)
+                    .amount(p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO)
+                    .paymentMethod(p.getPaymentMethod())
+                    .sourceType("MAINTENANCE_PAYMENT")
+                    .sourceId(p.getId())
+                    .build());
+        }
+
+        // ── Income: maintenance batch payments (PAID only) ─────────────────
+        for (BatchPayment bp : batchPaymentRepo.findAllPaidOrderByVerifiedDateDesc()) {
+            LocalDate txnDate = bp.getVerifiedDate() != null ? bp.getVerifiedDate() : bp.getSubmittedDate();
+            if (txnDate == null) continue; // defensive — should not happen for PAID rows
+
+            Resident r = bp.getResident();
+            MaintenanceBatch batch = bp.getBatch();
+            String category = batch != null && batch.getCategory() != null
+                    ? "Maintenance Batch: " + batch.getCategory()
+                    : "Maintenance Batch";
+            String description = batch != null && batch.getTitle() != null
+                    ? batch.getTitle() : "Maintenance batch payment";
+
+            entries.add(TransactionLedgerEntryDTO.builder()
+                    .date(txnDate)
+                    .type("INCOME")
+                    .category(category)
+                    .description(description)
+                    .residentName(r != null ? r.getFullName() : bp.getPaidByName())
+                    .flatNumber(r != null ? r.getFlatNumber() : null)
+                    .amount(bp.getAmount() != null ? bp.getAmount() : BigDecimal.ZERO)
+                    .paymentMethod(bp.getPaymentMethod())
+                    .sourceType("BATCH_PAYMENT")
+                    .sourceId(bp.getId())
+                    .build());
+        }
+
+        // ── Expense: every expense record ──────────────────────────────────
+        for (Expense e : expenseRepo.findAll()) {
+            if (e.getExpenseDate() == null) continue; // defensive — column is NOT NULL, but guard anyway
+
+            entries.add(TransactionLedgerEntryDTO.builder()
+                    .date(e.getExpenseDate())
+                    .type("EXPENSE")
+                    .category(e.getCategory())
+                    .description(e.getDescription() != null && !e.getDescription().isBlank()
+                            ? e.getDescription() : e.getExpenseName())
+                    .residentName(null)
+                    .flatNumber(null)
+                    .amount(e.getAmount() != null ? e.getAmount() : BigDecimal.ZERO)
+                    .paymentMethod(e.getPaymentMethod())
+                    .sourceType("EXPENSE")
+                    .sourceId(e.getId())
+                    .build());
+        }
+
+        // ── Sort by date descending (latest first), then assign serial numbers ──
+        entries.sort(Comparator.comparing(TransactionLedgerEntryDTO::getDate).reversed());
+        for (int i = 0; i < entries.size(); i++) {
+            entries.get(i).setSerialNo(i + 1);
+        }
+
+        return entries;
     }
 
     /**
