@@ -197,6 +197,11 @@ public class DashboardService {
 
         // Use property-level paid sum for user dashboard too
         // (residentId here is always the owner after FM→owner resolution in the controller)
+        // This is the SAME sum used everywhere else (Maintenance Summary,
+        // Financial Summary) — the sum of all VERIFIED (PAID) payments for
+        // the month — so "total paid" never diverges across screens, and now
+        // correctly accumulates across multiple partial payments instead of
+        // reflecting only the most recent one.
         Double totalPaidThisMonth = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(
                 residentId, currentMonth);
         totalPaidThisMonth = totalPaidThisMonth == null ? 0.0 : totalPaidThisMonth;
@@ -211,10 +216,6 @@ public class DashboardService {
                 .existsPendingByResidentIdAndPaymentMonth(residentId, currentMonth);
 
         boolean hasPendingVerification = hasPendingVerificationInPayments || hasPendingVerificationRequest;
-
-        String paymentStatus = hasAnyPaid ? "PAID"
-                : hasPendingVerification  ? "PENDING_VERIFICATION"
-                : "UNPAID";
 
         com.resitrack.entity.Maintenance activeMaintEntity =
                 maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true).orElse(null);
@@ -266,6 +267,31 @@ public class DashboardService {
         double totalAssigned = currentDueAmount + lateFee;
         double pendingDue    = Math.max(0.0, totalAssigned - totalPaidThisMonth);
 
+        // ── Partial payments: PAID / PARTIAL / UNPAID ───────────────────────
+        //
+        // Previously this was a binary hasAnyPaid check, so a resident who had
+        // paid even ₹1 of a ₹3000 bill was shown "PAID" — incorrect, and it
+        // also meant the dashboard never reflected an in-progress installment
+        // payment. Now mirrors the exact same PAID/PARTIAL/UNPAID convention
+        // already used by MaintenanceOwnerDTO / Maintenance Summary:
+        //
+        //   pendingDue == 0 (and something was actually owed/paid) → PAID
+        //   pendingDue >  0 AND totalPaidThisMonth > 0             → PARTIAL
+        //   totalPaidThisMonth == 0                                → UNPAID
+        //
+        // PENDING_VERIFICATION still takes priority when nothing has been
+        // verified yet this month, exactly as before.
+        String paymentStatus;
+        if (pendingDue <= 0.0 && totalAssigned > 0.0) {
+            paymentStatus = "PAID";
+        } else if (hasAnyPaid) {
+            paymentStatus = "PARTIAL";
+        } else if (hasPendingVerification) {
+            paymentStatus = "PENDING_VERIFICATION";
+        } else {
+            paymentStatus = "UNPAID";
+        }
+
         String currentTxnId = payments.stream()
                 .filter(p -> currentMonth.equals(p.getPaymentMonth())
                         && p.getPaymentStatus() == Payment.PaymentStatus.PAID)
@@ -281,6 +307,7 @@ public class DashboardService {
         stats.put("lastPaymentMethod", lastPayment.map(Payment::getPaymentMethod).orElse(null));
         stats.put("paymentStatus",     paymentStatus);
         stats.put("currentDue",        pendingDue);
+        stats.put("remainingAmount",   pendingDue);
         stats.put("currentMonthDue",   currentDueAmount);
         stats.put("paidAmount",        totalPaidThisMonth);
         stats.put("lateFee",           lateFee);

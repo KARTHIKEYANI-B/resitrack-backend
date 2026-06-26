@@ -24,6 +24,7 @@ public class PaymentService {
     private final PaymentRepository     paymentRepo;
     private final ResidentRepository    residentRepo;
     private final MaintenanceRepository maintenanceRepo;
+    private final MaintenanceService    maintenanceService;
     private final ReceiptRepository     receiptRepo;
     private final NotificationService   notificationService;
 
@@ -96,6 +97,10 @@ public class PaymentService {
         String currentMonth = LocalDate.now().getYear() + "-"
                 + String.format("%02d", LocalDate.now().getMonthValue());
 
+        // Allow installment payments here too: only reject once the required
+        // amount has already been fully covered by VERIFIED (PAID) payments.
+        validateRemainingBalance(r, currentMonth, m.getAmount() != null ? m.getAmount() : BigDecimal.ZERO);
+
         Payment p = Payment.builder()
                 .resident(r).maintenance(m)
                 .amount(m.getAmount()).lateFeeAmount(lateFee)
@@ -141,10 +146,21 @@ public class PaymentService {
      *                             verificationStatus=PENDING, awaits the normal
      *                             approve/reject flow — unchanged from today.
      *
-     * DUPLICATE PREVENTION: one PAID payment per (resident, paymentMonth).
-     * Mirrors the existing existsByResidentIdAndPaymentMonthAndPaymentStatus
-     * check already used elsewhere in the codebase — does not touch Maintenance
-     * Batch payments (separate batch_payments table/flow, untouched here).
+     * PARTIAL PAYMENTS: multiple payments are allowed for the same resident +
+     * paymentMonth (installments). What used to be an all-or-nothing block —
+     * any existing PAID row for the month rejected every further attempt,
+     * even a legitimate remaining-balance payment — is now a remaining-
+     * balance check:
+     *
+     *   requiredAmount  = MaintenanceService.getRequiredMaintenanceAmountFor(resident)
+     *   totalPaidAmount = sum of all VERIFIED (PAID) payments this month
+     *                     (sumPaidAmountByPropertyAndPaymentMonth — same sum
+     *                     Maintenance Summary / Financial Summary / Dashboard use)
+     *   remainingAmount = requiredAmount − totalPaidAmount
+     *
+     * Rejected only when remainingAmount <= 0 ("already fully paid") or when
+     * this entry's amount would exceed the remaining balance. Does not touch
+     * Maintenance Batch payments (separate batch_payments table/flow).
      *
      * adminCreated = true distinguishes this row from owner-submitted
      * payments everywhere downstream (Maintenance Summary, Financial Summary,
@@ -182,13 +198,10 @@ public class PaymentService {
             resident = residentRepo.findById(resident.getOwnerResidentId()).orElse(resident);
         }
 
-        // Never create a second PAID record for the same resident + month.
-        if (paymentRepo.existsByResidentIdAndPaymentMonthAndPaymentStatus(
-                resident.getId(), req.getPaymentMonth(), Payment.PaymentStatus.PAID)) {
-            throw new CustomException(
-                    "This owner already has a PAID payment recorded for " + req.getPaymentMonth(),
-                    HttpStatus.BAD_REQUEST);
-        }
+        // Allow installment payments: only reject once the required amount
+        // has already been fully covered by VERIFIED (PAID) payments, or if
+        // this entry alone would push the total beyond what's required.
+        validateRemainingBalance(resident, req.getPaymentMonth(), req.getPaidAmount());
 
         boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
 
@@ -245,6 +258,46 @@ public class PaymentService {
         return maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true)
                 .filter(m -> m.getPropertyType() == null)
                 .orElse(null);
+    }
+
+    /**
+     * Allow Partial Maintenance Payments — same gate as
+     * PaymentVerificationService.validateRemainingBalance, parameterized by
+     * paymentMonth since an admin can record a payment against any billing
+     * month (not just the current one, unlike the owner self-service flow).
+     *
+     *   requiredAmount  = MaintenanceService.getRequiredMaintenanceAmountFor(resident)
+     *   totalPaidAmount = sum of all VERIFIED (PAID) payments for this
+     *                     resident's property + paymentMonth
+     *                     (sumPaidAmountByPropertyAndPaymentMonth — the exact
+     *                     same sum Maintenance Summary / Financial Summary /
+     *                     the Owner Dashboard already use)
+     *   remainingAmount = requiredAmount − totalPaidAmount
+     *
+     * Rejects when remainingAmount <= 0 (nothing left to pay) or when this
+     * entry's amount would push the total beyond what's required — while
+     * still allowing any number of partial installments up to the exact
+     * remaining balance.
+     */
+    private void validateRemainingBalance(Resident resident, String paymentMonth, BigDecimal requestedAmount) {
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+        if (required.compareTo(BigDecimal.ZERO) <= 0) return; // nothing configured — nothing to gate
+
+        Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), paymentMonth);
+        BigDecimal totalPaid = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+
+        BigDecimal remaining = required.subtract(totalPaid);
+
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(
+                    "Maintenance for this month has already been fully paid.", HttpStatus.BAD_REQUEST);
+        }
+
+        if (requestedAmount.compareTo(remaining) > 0) {
+            throw new CustomException(
+                    "Amount exceeds the remaining balance of " + remaining.setScale(2, java.math.RoundingMode.HALF_UP)
+                            + " for this month.", HttpStatus.BAD_REQUEST);
+        }
     }
 
     private void generateReceipt(Payment payment) {

@@ -216,6 +216,35 @@ public class MaintenanceService {
         return getActiveMaintenanceConfig(r != null ? r.getPropertyType() : null);
     }
 
+    // ── Required maintenance amount (single source of truth) ───────────────
+    //
+    // Used by the partial-payment "remaining balance" check (Owner self-pay
+    // verification, Admin Manual Payment Registration) so the amount a
+    // resident is allowed to pay is always computed the exact same way the
+    // Owner/Family Member Dashboard already computes "Current Month Due"
+    // (DashboardService.getUserStats): the single legacy active Maintenance
+    // row (no property-type split) + calculateAmountForResident(sqFt).
+    //
+    // Intentionally mirrors DashboardService's existing lookup rather than
+    // the property-type-aware getActiveMaintenanceConfigFor(), so this does
+    // not introduce a NEW discrepancy between "what the dashboard shows you
+    // owe" and "what the payment gate allows you to pay" — fixing that
+    // existing FLAT/VILLA active-row selection gap is a separate, unrelated
+    // concern from allowing partial payments.
+    public BigDecimal getRequiredMaintenanceAmountFor(Resident resident) {
+        Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
+        if (activeMaint.isEmpty()) return BigDecimal.ZERO;
+
+        Double sqFt = resident != null ? resident.getSqFt() : null;
+        try {
+            BigDecimal amt = calculateAmountForResident(activeMaint.get(), sqFt);
+            return amt != null ? amt : BigDecimal.ZERO;
+        } catch (Exception e) {
+            Maintenance m = activeMaint.get();
+            return m.getAmount() != null ? m.getAmount() : BigDecimal.ZERO;
+        }
+    }
+
     // ── Maintenance List ──────────────────────────────────────────────────
     //
     // GET /admin/maintenance/owner-list?year=YYYY&month=MM

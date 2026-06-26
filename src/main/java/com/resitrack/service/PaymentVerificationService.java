@@ -28,6 +28,7 @@ public class PaymentVerificationService {
     private final PaymentRepository                    paymentRepo;
     private final ResidentRepository                   residentRepo;
     private final MaintenanceRepository                maintenanceRepo;
+    private final MaintenanceService                   maintenanceService;
     private final ReceiptRepository                    receiptRepo;
     private final NotificationService                  notificationService;
     private final AdminRepository                      adminRepo;
@@ -57,6 +58,8 @@ public class PaymentVerificationService {
 
         if (paymentAmount == null || paymentAmount.compareTo(BigDecimal.ZERO) <= 0)
             throw new CustomException("Payment amount must be greater than 0", HttpStatus.BAD_REQUEST);
+
+        validateRemainingBalance(resident, paymentAmount);
 
         if (transactionId == null || transactionId.isBlank())
             throw new CustomException("Transaction ID is required", HttpStatus.BAD_REQUEST);
@@ -103,6 +106,8 @@ public class PaymentVerificationService {
 
         if (paymentAmount == null || paymentAmount.compareTo(BigDecimal.ZERO) <= 0)
             throw new CustomException("Payment amount must be greater than 0", HttpStatus.BAD_REQUEST);
+
+        validateRemainingBalance(resident, paymentAmount);
 
         if (paidToAdminId == null)
             throw new CustomException("Please select the admin you paid cash to", HttpStatus.BAD_REQUEST);
@@ -154,6 +159,8 @@ public class PaymentVerificationService {
 
         if (paymentAmount == null || paymentAmount.compareTo(BigDecimal.ZERO) <= 0)
             throw new CustomException("Payment amount must be greater than 0", HttpStatus.BAD_REQUEST);
+
+        validateRemainingBalance(resident, paymentAmount);
 
         if (referenceId == null || referenceId.isBlank())
             throw new CustomException("Reference / Transaction ID is required for bank transfer",
@@ -326,6 +333,55 @@ public class PaymentVerificationService {
         LocalDate now = LocalDate.now();
         return now.getYear() + "-" + String.format("%02d", now.getMonthValue());
     }
+
+    /**
+     * Allow Partial Maintenance Payments — the gate every owner self-service
+     * submission (GPay / Cash / Bank Transfer) passes through before a new
+     * PaymentVerificationRequest is even created.
+     *
+     *   requiredAmount = MaintenanceService.getRequiredMaintenanceAmountFor(resident)
+     *   totalPaidAmount = sum of all VERIFIED (PAID) payments for this resident's
+     *                     property + this month (sumPaidAmountByPropertyAndPaymentMonth —
+     *                     the exact same sum Maintenance Summary / Financial Summary /
+     *                     the Owner Dashboard already use, so "remaining" here can never
+     *                     disagree with what those screens show).
+     *   remainingAmount = requiredAmount - totalPaidAmount
+     *
+     * Rejects when remainingAmount <= 0 (nothing left to pay) or when this
+     * new submission's amount would push total paid beyond what's required
+     * (prevents an accidental/duplicate overpayment slipping through while
+     * still allowing any number of partial installments up to the exact
+     * remaining balance).
+     *
+     * Only counts VERIFIED (PAID) payments — a still-PENDING verification
+     * request does not reduce what a resident is allowed to submit next,
+     * since it may yet be rejected. This check intentionally lives only at
+     * submission time, not inside verifyRequest()/approvePayment() — the
+     * existing admin verification workflow (approve/reject mechanics, who
+     * can act, receipt generation) is left completely unchanged.
+     */
+    private void validateRemainingBalance(Resident resident, BigDecimal requestedAmount) {
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+        if (required.compareTo(BigDecimal.ZERO) <= 0) return; // nothing configured — nothing to gate
+
+        String currentMonth = currentMonthStr();
+        Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), currentMonth);
+        BigDecimal totalPaid = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+
+        BigDecimal remaining = required.subtract(totalPaid);
+
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(
+                    "Maintenance for this month has already been fully paid.", HttpStatus.BAD_REQUEST);
+        }
+
+        if (requestedAmount.compareTo(remaining) > 0) {
+            throw new CustomException(
+                    "Amount exceeds the remaining balance of " + remaining.setScale(2, java.math.RoundingMode.HALF_UP)
+                            + " for this month.", HttpStatus.BAD_REQUEST);
+        }
+    }
+
 
     private String saveScreenshot(MultipartFile file) throws IOException {
         if (file.getSize() > MAX_BYTES)
