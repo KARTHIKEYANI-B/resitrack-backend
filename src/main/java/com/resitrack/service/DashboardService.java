@@ -73,9 +73,11 @@ public class DashboardService {
         // remaining balance collected and verified in April), which let
         // "Collected Amount" silently diverge from Maintenance Summary and
         // Paid/Unpaid Details — exactly the bug this fixes. Bank/Cash
-        // breakdown and Available Balance below are a deliberately separate,
-        // unaffected cash-flow-timing view (paymentDate-based, same as
-        // Financial Summary) and are intentionally left untouched.
+        // Received below now use the same paymentMonth basis (see further
+        // down) so this card's own Bank + Cash breakdown always sums back
+        // to Total Amount Collected; Available Balance's expense side and
+        // Financial Summary remain on paymentDate, a deliberately separate
+        // cash-flow-timing view, and are unaffected.
         MaintenanceListDTO currentMaintList;
         try {
             currentMaintList = maintenanceService.getOwnerMaintenanceList(year, month);
@@ -92,8 +94,20 @@ public class DashboardService {
         cashExpense = cashExpense == null ? 0.0 : cashExpense;
         double totalExpense = bankExpense + cashExpense;
 
-        Double bankPaid = paymentRepo.sumBankCollectedByYearAndMonth(year, month);
-        Double cashPaid = paymentRepo.sumCashCollectedByYearAndMonth(year, month);
+        // Bank/Cash Received MUST be keyed by the same "month" as Collected
+        // Amount above (p.paymentMonth, the billing month) — not
+        // p.paymentDate (the calendar date collected/verified) — otherwise
+        // Bank Received + Cash Received silently stops summing to Total
+        // Amount Collected on this exact screen whenever an installment is
+        // verified in a different calendar month than its billing month.
+        // sumBankPaidByPaymentMonth/sumCashPaidByPaymentMonth already existed
+        // in the repository (unused until now) and split the EXACT same set
+        // of PAID rows this month's grandTotalPaid sums, just by method
+        // instead of by owner/property-type, so the three numbers always
+        // reconcile: bankPaid + cashPaid == income.
+        String paymentMonthKey = String.format("%d-%02d", year, month);
+        Double bankPaid = paymentRepo.sumBankPaidByPaymentMonth(paymentMonthKey);
+        Double cashPaid = paymentRepo.sumCashPaidByPaymentMonth(paymentMonthKey);
         bankPaid = bankPaid == null ? 0.0 : bankPaid;
         cashPaid = cashPaid == null ? 0.0 : cashPaid;
 
