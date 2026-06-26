@@ -54,10 +54,38 @@ public class DashboardService {
      */
     public DashboardStatsDTO getAdminStats(int year, int month) {
 
-        // ── Financial figures ─────────────────────────────────────────────
-        Double income = paymentRepo.sumPaidAmountByYearAndMonth(year, month);
-        income = income == null ? 0.0 : income;
+        // ── Collected Amount — single source of truth ──────────────────────
+        //
+        // "Collected Amount" (totalMonthlyIncome) MUST equal Maintenance
+        // Summary's Flat+Villa total paid amount and Paid/Unpaid Details'
+        // monthly total, for the same calendar month. All three now derive
+        // from the exact same figure: MaintenanceListDTO.grandTotalPaid,
+        // which sums each owner's paidAmount — itself
+        // sumPaidAmountByPropertyAndPaymentMonth(owner, paymentMonth), the
+        // property-level (owner + linked Family Members), PAID-only,
+        // BILLING-month-keyed sum.
+        //
+        // The previous query here — paymentRepo.sumPaidAmountByYearAndMonth —
+        // filtered by YEAR/MONTH(p.paymentDate), i.e. the calendar date a
+        // payment was actually collected/verified, NOT the billing month
+        // (p.paymentMonth) it was paid toward. Those two can legitimately
+        // differ for partial/installment payments (e.g. a March bill's
+        // remaining balance collected and verified in April), which let
+        // "Collected Amount" silently diverge from Maintenance Summary and
+        // Paid/Unpaid Details — exactly the bug this fixes. Bank/Cash
+        // breakdown and Available Balance below are a deliberately separate,
+        // unaffected cash-flow-timing view (paymentDate-based, same as
+        // Financial Summary) and are intentionally left untouched.
+        MaintenanceListDTO currentMaintList;
+        try {
+            currentMaintList = maintenanceService.getOwnerMaintenanceList(year, month);
+        } catch (Exception e) {
+            currentMaintList = null;
+        }
+        double income = currentMaintList != null && currentMaintList.getGrandTotalPaid() != null
+                ? currentMaintList.getGrandTotalPaid().doubleValue() : 0.0;
 
+        // ── Financial figures ─────────────────────────────────────────────
         Double bankExpense = expenseRepo.sumBankExpenseByYearAndMonth(year, month);
         Double cashExpense = expenseRepo.sumCashExpenseByYearAndMonth(year, month);
         bankExpense = bankExpense == null ? 0.0 : bankExpense;
@@ -75,10 +103,20 @@ public class DashboardService {
 
         int prevMonth = month == 1 ? 12 : month - 1;
         int prevYear  = month == 1 ? year - 1 : year;
-        Double prevIncome  = paymentRepo.sumPaidAmountByYearAndMonth(prevYear, prevMonth);
+
+        // Previous month's collected amount via the exact same authoritative
+        // source, so month-over-month "revenue growth" compares like with like.
+        MaintenanceListDTO prevMaintList;
+        try {
+            prevMaintList = maintenanceService.getOwnerMaintenanceList(prevYear, prevMonth);
+        } catch (Exception e) {
+            prevMaintList = null;
+        }
+        double prevIncome = prevMaintList != null && prevMaintList.getGrandTotalPaid() != null
+                ? prevMaintList.getGrandTotalPaid().doubleValue() : 0.0;
+
         Double prevBankExp = expenseRepo.sumBankExpenseByYearAndMonth(prevYear, prevMonth);
         Double prevCashExp = expenseRepo.sumCashExpenseByYearAndMonth(prevYear, prevMonth);
-        prevIncome  = prevIncome  == null ? 0.0 : prevIncome;
         double prevExpense = (prevBankExp == null ? 0.0 : prevBankExp)
                            + (prevCashExp == null ? 0.0 : prevCashExp);
 
@@ -95,19 +133,16 @@ public class DashboardService {
 
         // ── Payment status counts from Maintenance List ───────────────────
         //
-        // Derive counts from the same DTOs the Maintenance List renders.
+        // Reuses currentMaintList (already fetched above for Collected
+        // Amount) instead of calling getOwnerMaintenanceList() a second time.
         // Each DTO has paymentStatus ("PAID" / "PARTIAL" / "UNPAID") and
         // pendingAmount already computed with property-level FM aggregation.
         //
         // This guarantees zero divergence between Dashboard and Maintenance List.
-        // Wrapped in try-catch so a calculation edge case never blocks the dashboard.
         List<MaintenanceOwnerDTO> allOwnerDTOs = new ArrayList<>();
-        try {
-            MaintenanceListDTO maintList = maintenanceService.getOwnerMaintenanceList(year, month);
-            if (maintList.getFlatOwners()  != null) allOwnerDTOs.addAll(maintList.getFlatOwners());
-            if (maintList.getVillaOwners() != null) allOwnerDTOs.addAll(maintList.getVillaOwners());
-        } catch (Exception ignored) {
-            // If maintenance list calculation fails, counts default to 0 — dashboard still loads
+        if (currentMaintList != null) {
+            if (currentMaintList.getFlatOwners()  != null) allOwnerDTOs.addAll(currentMaintList.getFlatOwners());
+            if (currentMaintList.getVillaOwners() != null) allOwnerDTOs.addAll(currentMaintList.getVillaOwners());
         }
 
         int    fullPaymentCount    = 0;   // PAID (pendingAmount == 0)

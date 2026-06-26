@@ -295,6 +295,24 @@ public class MaintenanceService {
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // ── Total PAID (collected) amount — the single source of truth for
+        // "Collected Amount" everywhere else in the app (Admin Dashboard,
+        // Paid/Unpaid Details). Summed from each owner's paidAmount, which
+        // buildOwnerDTOs() already computes via
+        // sumPaidAmountByPropertyAndPaymentMonth(owner.id, paymentMonth) —
+        // the property-level (owner + linked Family Members), PAID-only,
+        // paymentMonth-keyed sum. No new query: this is purely an aggregation
+        // of figures already shown per-row on this exact screen, so it can
+        // never drift from what the admin sees in the Flat/Villa tables below.
+        BigDecimal totalFlatPaid  = flatDTOs.stream()
+                .map(MaintenanceOwnerDTO::getPaidAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalVillaPaid = villaDTOs.stream()
+                .map(MaintenanceOwnerDTO::getPaidAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
         // paidCount: any owner whose pendingAmount == 0 (includes FM-completed payments)
         long paidFlat  = flatDTOs.stream().filter(d -> "PAID".equals(d.getPaymentStatus())).count();
         long paidVilla = villaDTOs.stream().filter(d -> "PAID".equals(d.getPaymentStatus())).count();
@@ -311,6 +329,9 @@ public class MaintenanceService {
                 .totalFlatMaintenance(totalFlat)
                 .totalVillaMaintenance(totalVilla)
                 .grandTotal(totalFlat.add(totalVilla))
+                .totalFlatPaid(totalFlatPaid)
+                .totalVillaPaid(totalVillaPaid)
+                .grandTotalPaid(totalFlatPaid.add(totalVillaPaid))
                 .totalFlatOwners(flatDTOs.size())
                 .totalVillaOwners(villaDTOs.size())
                 .paidFlatOwners((int) paidFlat)
