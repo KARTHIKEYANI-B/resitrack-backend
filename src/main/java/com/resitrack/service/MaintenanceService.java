@@ -220,19 +220,28 @@ public class MaintenanceService {
     //
     // Used by the partial-payment "remaining balance" check (Owner self-pay
     // verification, Admin Manual Payment Registration) so the amount a
-    // resident is allowed to pay is always computed the exact same way the
-    // Owner/Family Member Dashboard already computes "Current Month Due"
-    // (DashboardService.getUserStats): the single legacy active Maintenance
-    // row (no property-type split) + calculateAmountForResident(sqFt).
+    // resident is allowed to pay is always the SAME figure Maintenance
+    // Summary shows for that exact resident.
     //
-    // Intentionally mirrors DashboardService's existing lookup rather than
-    // the property-type-aware getActiveMaintenanceConfigFor(), so this does
-    // not introduce a NEW discrepancy between "what the dashboard shows you
-    // owe" and "what the payment gate allows you to pay" — fixing that
-    // existing FLAT/VILLA active-row selection gap is a separate, unrelated
-    // concern from allowing partial payments.
+    // FIX: previously called maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true)
+    // directly — the single most-recently-created active row, with NO
+    // property-type filter. Once an admin configures separate Flat and
+    // Villa rates, BOTH rows are active at once; "most recently created"
+    // could be either one, independent of which property type the resident
+    // actually belongs to. A Flat owner's payment could then be validated
+    // against the Villa rate (or vice versa) purely because the Villa row
+    // happened to be saved more recently — e.g. a Flat owner's real bill of
+    // ₹2015 being checked against a stray ₹1642 Villa-derived figure,
+    // rejecting a fully legitimate, correct-amount payment.
+    //
+    // Now resolves via getActiveMaintenanceConfigFor(resident), the exact
+    // same property-type-aware chokepoint getOwnerMaintenanceList() (the
+    // Maintenance Summary screen) already uses to pick the Flat row for
+    // Flat owners and the Villa row for Villa owners — falling back to the
+    // legacy property-agnostic row only when no property-specific rate has
+    // been configured yet, identical to Maintenance Summary's own fallback.
     public BigDecimal getRequiredMaintenanceAmountFor(Resident resident) {
-        Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
+        Optional<Maintenance> activeMaint = getActiveMaintenanceConfigFor(resident);
         if (activeMaint.isEmpty()) return BigDecimal.ZERO;
 
         Double sqFt = resident != null ? resident.getSqFt() : null;
