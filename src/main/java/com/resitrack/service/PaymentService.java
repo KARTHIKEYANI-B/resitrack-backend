@@ -1,7 +1,6 @@
 package com.resitrack.service;
 
 import com.resitrack.dto.AdminPaymentRequest;
-import com.resitrack.dto.DuplicatePaymentGroupDTO;
 import com.resitrack.dto.PaymentRequest;
 import com.resitrack.dto.PaymentResponseDTO;
 import com.resitrack.dto.TransactionLedgerEntryDTO;
@@ -479,20 +478,23 @@ public class PaymentService {
     }
 
     /**
-     * Task 1 — Duplicate Payment Cleanup (Super Admin only).
+     * Super Admin payment deletion.
      *
      * Permanently removes a payment record from the database, and with it
      * removes that amount from EVERY downstream total, because every
      * consumer (Admin Dashboard, Maintenance Summary, Paid/Unpaid Details,
      * Financial Summary, Payment Management) reads straight from the
      * `payments` table on each request — there is no cached/duplicated copy
-     * of a payment's amount anywhere else to also clean up.
+     * of a payment's amount anywhere else to also clean up. Totals
+     * recalculate automatically on the next read; no separate
+     * "recalculate" step exists or is needed.
      *
      * Restricted to Super Admin (same permission model as
      * AdminAccountController's destructive admin-account actions): a
-     * regular Admin can view Payment Management but cannot delete payment
-     * records, since deletion is irreversible and directly changes
-     * collection totals shown to everyone.
+     * regular Admin, Owner, Family Member, or Security account can never
+     * delete a payment record, since deletion is irreversible and directly
+     * changes collection totals shown to everyone. This is enforced here,
+     * server-side, regardless of what the calling UI shows or hides.
      *
      * The associated Receipt (if one was generated for this payment) is
      * deleted first and explicitly, rather than relying solely on the
@@ -527,35 +529,6 @@ public class PaymentService {
                 paymentId,
                 payment.getResident() != null ? payment.getResident().getId() : null,
                 payment.getAmount(), payment.getPaymentMonth(), callerEmail);
-    }
-
-    /**
-     * Task 1 — Duplicate Payment Cleanup (read-only report).
-     *
-     * Surfaces every (resident, paymentMonth) combination that currently
-     * has more than one PAID payment row, so a Super Admin can see exactly
-     * which rows are duplicates before deleting the extra one(s) via
-     * deletePayment(). Read-only — identifying duplicates never itself
-     * changes any total.
-     */
-    public List<DuplicatePaymentGroupDTO> getDuplicatePayments() {
-        List<PaymentRepository.DuplicatePaymentGroup> groups = paymentRepo.findDuplicatePaidGroups();
-
-        return groups.stream().map(g -> {
-            Resident r = residentRepo.findById(g.getResidentId()).orElse(null);
-            List<Payment> rows = paymentRepo.findPaidByResidentIdAndPaymentMonth(
-                    g.getResidentId(), g.getPaymentMonth());
-
-            return DuplicatePaymentGroupDTO.builder()
-                    .residentId(g.getResidentId())
-                    .residentName(r != null ? r.getFullName() : "—")
-                    .flatNumber(r != null ? r.getFlatNumber() : "—")
-                    .paymentMonth(g.getPaymentMonth())
-                    .duplicateCount(g.getDuplicateCount())
-                    .totalAmount(g.getTotalAmount())
-                    .payments(rows.stream().map(PaymentResponseDTO::from).collect(Collectors.toList()))
-                    .build();
-        }).collect(Collectors.toList());
     }
 
     private void generateReceipt(Payment payment) {

@@ -230,33 +230,21 @@ public class PaymentController {
     }
 
     /**
-     * GET /admin/payments/duplicates
-     *
-     * Task 1 — Duplicate Payment Cleanup.
-     *
-     * Returns every (resident, paymentMonth) pair with more than one PAID
-     * payment row, so a Super Admin can review and remove the duplicate
-     * row(s) via DELETE /admin/payments/{id}. Visible to any Admin (read
-     * only); the delete action itself is Super-Admin-gated in the service.
-     */
-    @GetMapping("/admin/payments/duplicates")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<List<DuplicatePaymentGroupDTO>>> getDuplicatePayments() {
-        return ResponseEntity.ok(ApiResponse.success(paymentService.getDuplicatePayments()));
-    }
-
-    /**
      * DELETE /admin/payments/{id}
      *
-     * Task 1 — Duplicate Payment Cleanup. Super Admin only (enforced
+     * Super Admin only — removing a payment record is a permanent,
+     * destructive action restricted to the Super Admin role (enforced
      * server-side in PaymentService.deletePayment via the caller's email
-     * from the JWT — never trust a client-supplied role/flag). Permanently
-     * removes the payment row (and its receipt, if any) from the database.
-     * Every downstream total (Admin Dashboard, Maintenance Summary,
-     * Paid/Unpaid Details, Financial Summary, Payment Management) reads
-     * the `payments` table directly on each request, so the deleted amount
-     * disappears from all of them immediately — no separate "recalculate"
-     * step is needed.
+     * from the JWT — never trust a client-supplied role/flag). Regular
+     * Admins, Owners, Family Members, and Security never see or can call
+     * this action.
+     *
+     * Permanently removes the payment row (and its receipt, if any) from
+     * the database. Every downstream total (Admin Dashboard, Maintenance
+     * Summary, Paid/Unpaid Details, Financial Summary, Payment Management)
+     * reads the `payments` table directly on each request, so the deleted
+     * amount disappears from all of them immediately — no separate
+     * "recalculate" step is needed.
      */
     @DeleteMapping("/admin/payments/{id}")
     @PreAuthorize("hasRole('ADMIN')")
