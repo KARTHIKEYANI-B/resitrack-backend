@@ -237,4 +237,47 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     Long countActiveNonDeletedByPropertyType(
             @Param("year") int year,
             @Param("month") int month);
+
+    /**
+     * Task 1 — Duplicate Payment Cleanup.
+     *
+     * Finds every (resident_id, payment_month) pair that has MORE THAN ONE
+     * PAID payment row — i.e. an owner who has been charged/credited twice
+     * (or more) for the same maintenance month. This is the root cause of
+     * Admin Dashboard / Maintenance Summary / Paid-Unpaid Details (which all
+     * sum via sumPaidAmountByPropertyAndPaymentMonth, so duplicates simply
+     * add into the same total they already show) silently agreeing with
+     * each other while still being inflated by genuine duplicate rows.
+     *
+     * Returns one row per duplicated (resident, paymentMonth) group with the
+     * group's row count and summed amount, so the admin can see exactly
+     * which owner/month combinations need manual review before deleting the
+     * extra row(s) via DELETE /admin/payments/{id}.
+     */
+    @Query("SELECT p.resident.id AS residentId, p.paymentMonth AS paymentMonth, " +
+           "COUNT(p) AS duplicateCount, SUM(p.amount) AS totalAmount " +
+           "FROM Payment p " +
+           "WHERE p.paymentStatus = 'PAID' AND p.paymentMonth IS NOT NULL " +
+           "GROUP BY p.resident.id, p.paymentMonth " +
+           "HAVING COUNT(p) > 1")
+    List<DuplicatePaymentGroup> findDuplicatePaidGroups();
+
+    interface DuplicatePaymentGroup {
+        Long getResidentId();
+        String getPaymentMonth();
+        Long getDuplicateCount();
+        java.math.BigDecimal getTotalAmount();
+    }
+
+    /**
+     * All PAID payments for one resident + billing month, oldest first — used
+     * to list the individual duplicate rows (with id, amount, date, method)
+     * once findDuplicatePaidGroups() has identified an affected group.
+     */
+    @Query("SELECT p FROM Payment p WHERE p.resident.id = :residentId " +
+           "AND p.paymentMonth = :paymentMonth AND p.paymentStatus = 'PAID' " +
+           "ORDER BY p.createdAt ASC")
+    List<Payment> findPaidByResidentIdAndPaymentMonth(
+            @Param("residentId") Long residentId,
+            @Param("paymentMonth") String paymentMonth);
 }

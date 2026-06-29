@@ -101,11 +101,26 @@ public class PaymentController {
         long unpaidOwners = Math.max(0, activeOwners - paidOwners);
 
         // ── Current-month collection ──────────────────────────────────────
-        Double collected = paymentRepo.sumPaidAmountByYearAndMonth(year, month);
+        //
+        // FIX (Task 1 — cross-module collection total consistency):
+        // Previously used sumPaidAmountByYearAndMonth / sumBankCollectedByYearAndMonth
+        // / sumCashCollectedByYearAndMonth, which filter by YEAR/MONTH(p.paymentDate)
+        // — the calendar date a payment was actually collected/verified — instead of
+        // p.paymentMonth, the billing month it was paid toward. Those two can
+        // legitimately differ for partial/installment payments (e.g. a June bill's
+        // remaining balance collected and verified in July), which let "Total
+        // Collected This Month" on this page (Payment Management) silently diverge
+        // from Admin Dashboard / Maintenance Summary / Paid-Unpaid Details, all of
+        // which already key strictly off p.paymentMonth via
+        // sumPaidAmountByPropertyAndPaymentMonth. Now uses the same paymentMonth-keyed
+        // queries (sumPaidAmountByPaymentMonth / sumBankPaidByPaymentMonth /
+        // sumCashPaidByPaymentMonth) so this card can never disagree with those
+        // other screens for the same calendar month again.
+        Double collected = paymentRepo.sumPaidAmountByPaymentMonth(currentMonthStr);
         collected = collected == null ? 0.0 : collected;
 
-        Double bankCollected = paymentRepo.sumBankCollectedByYearAndMonth(year, month);
-        Double cashCollected = paymentRepo.sumCashCollectedByYearAndMonth(year, month);
+        Double bankCollected = paymentRepo.sumBankPaidByPaymentMonth(currentMonthStr);
+        Double cashCollected = paymentRepo.sumCashPaidByPaymentMonth(currentMonthStr);
         bankCollected = bankCollected == null ? 0.0 : bankCollected;
         cashCollected = cashCollected == null ? 0.0 : cashCollected;
 
@@ -212,6 +227,43 @@ public class PaymentController {
         String reason = body != null ? body.get("reason") : null;
         return ResponseEntity.ok(
                 ApiResponse.success("Payment rejected", paymentService.rejectPayment(id, reason)));
+    }
+
+    /**
+     * GET /admin/payments/duplicates
+     *
+     * Task 1 — Duplicate Payment Cleanup.
+     *
+     * Returns every (resident, paymentMonth) pair with more than one PAID
+     * payment row, so a Super Admin can review and remove the duplicate
+     * row(s) via DELETE /admin/payments/{id}. Visible to any Admin (read
+     * only); the delete action itself is Super-Admin-gated in the service.
+     */
+    @GetMapping("/admin/payments/duplicates")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<List<DuplicatePaymentGroupDTO>>> getDuplicatePayments() {
+        return ResponseEntity.ok(ApiResponse.success(paymentService.getDuplicatePayments()));
+    }
+
+    /**
+     * DELETE /admin/payments/{id}
+     *
+     * Task 1 — Duplicate Payment Cleanup. Super Admin only (enforced
+     * server-side in PaymentService.deletePayment via the caller's email
+     * from the JWT — never trust a client-supplied role/flag). Permanently
+     * removes the payment row (and its receipt, if any) from the database.
+     * Every downstream total (Admin Dashboard, Maintenance Summary,
+     * Paid/Unpaid Details, Financial Summary, Payment Management) reads
+     * the `payments` table directly on each request, so the deleted amount
+     * disappears from all of them immediately — no separate "recalculate"
+     * step is needed.
+     */
+    @DeleteMapping("/admin/payments/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<Void>> deletePayment(
+            @PathVariable Long id, Authentication auth) {
+        paymentService.deletePayment(id, auth.getName());
+        return ResponseEntity.ok(ApiResponse.success("Payment record deleted", null));
     }
 
     @PostMapping("/user/maintenance/pay")

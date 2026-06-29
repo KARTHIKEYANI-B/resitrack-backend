@@ -36,38 +36,42 @@ public class FinancialReportService {
                 .sorted(Comparator.comparing(r -> r.getFlatNumber() != null ? r.getFlatNumber() : ""))
                 .collect(Collectors.toList());
 
-        // ── Fetch PAID payments for the period ─────────────────────────────
+        // ── Fetch PAID payments for the period, grouped by BILLING month ───
         //
-        // findByStatusAndYearRange(status, year, startMonth, endMonth) runs
-        // "YEAR(date) = :year AND MONTH(date) BETWEEN :startMonth AND :endMonth".
-        // That SQL BETWEEN is only valid within a single calendar year — if
-        // startMonth > endMonth (a Financial Year range such as Apr→Mar,
-        // e.g. startMonth=4, endMonth=3), "MONTH BETWEEN 4 AND 3" matches
-        // zero rows, since 4..3 is an empty range. The query itself was never
-        // changed; this just calls it twice with valid same-year sub-ranges
-        // for FY periods — the exact pattern already used by
-        // ResidentPaymentSummaryService.getResidentPaymentDetail() for the
-        // same Apr-Mar FY range.
-        List<Payment> allPayments;
-        if (startMonth <= endMonth) {
-            allPayments = paymentRepo.findByStatusAndYearRange(
-                    Payment.PaymentStatus.PAID, year, startMonth, endMonth);
-        } else {
-            List<Payment> firstHalf  = paymentRepo.findByStatusAndYearRange(
-                    Payment.PaymentStatus.PAID, year, startMonth, 12);
-            List<Payment> secondHalf = paymentRepo.findByStatusAndYearRange(
-                    Payment.PaymentStatus.PAID, year + 1, 1, endMonth);
-            allPayments = new ArrayList<>(firstHalf.size() + secondHalf.size());
-            allPayments.addAll(firstHalf);
-            allPayments.addAll(secondHalf);
-        }
+        // FIX (Task 1 — cross-module collection total consistency): this
+        // table's per-resident, per-month cells (and therefore its column
+        // totals and grandTotal) MUST equal Admin Dashboard's "Collected
+        // Amount" / Maintenance Summary's paid total / Paid-Unpaid Details'
+        // column total for the same month. Previously grouped PAID payments
+        // by p.getPaymentDate()'s calendar month — the date a payment was
+        // actually collected/verified — instead of p.paymentMonth, the
+        // billing month it was paid toward. Those two can legitimately
+        // differ for partial/installment payments (e.g. a June bill's
+        // remaining balance collected and verified in July), which could
+        // split one bill's installments across two different month columns
+        // here while every other screen still showed them as one June
+        // total — exactly the "different value in Financial Summary" bug.
+        //
+        // Now fetched via findByStatusAndPaymentMonthRange (the same
+        // paymentMonth-keyed range query ResidentPaymentSummaryService
+        // already uses for the Paid/Unpaid Detail screen) and grouped by
+        // p.getPaymentMonth() directly — paymentMonth is always a
+        // zero-padded "YYYY-MM" string, so building the lexicographic range
+        // bounds below and comparing them is safe and chronologically
+        // correct across a year boundary, exactly like that service's own
+        // FY range.
+        String startKey = year + "-" + String.format("%02d", startMonth);
+        String endKey   = (startMonth <= endMonth ? year : year + 1)
+                + "-" + String.format("%02d", endMonth);
+
+        List<Payment> allPayments = paymentRepo.findByStatusAndPaymentMonthRange(
+                Payment.PaymentStatus.PAID, startKey, endKey);
 
         Map<Long, Map<String, BigDecimal>> paymentMap = new HashMap<>();
         for (Payment p : allPayments) {
-            if (p.getPaymentDate() == null) continue;
+            if (p.getPaymentMonth() == null || p.getResident() == null) continue;
             Long   resId    = p.getResident().getId();
-            String monthKey = p.getPaymentDate().getYear() + "-"
-                    + String.format("%02d", p.getPaymentDate().getMonthValue());
+            String monthKey = p.getPaymentMonth();
             paymentMap
                 .computeIfAbsent(resId, k -> new LinkedHashMap<>())
                 .merge(monthKey, p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO,
@@ -145,7 +149,12 @@ public class FinancialReportService {
         }
 
         double totalCollected = grandTotal.doubleValue();
-        double prevBalance    = safe(paymentRepo.sumPaidAmountByYearRange(year, 1, startMonth - 1))
+        // FIX (Task 1): opening balance's collected portion must use the same
+        // paymentMonth basis as the matrix above it, not paymentDate — see
+        // sumPaidAmountByPaymentMonthRange() for the shared reasoning.
+        // (sumPaidAmountByPaymentMonthRange already returns a null-safe
+        // primitive double — no extra safe() wrapper needed here.)
+        double prevBalance    = sumPaidAmountByPaymentMonthRange(year, 1, startMonth - 1)
                               - safe(expenseRepo.sumByYearBeforeMonth(year, startMonth));
 
         // FY label for the Collection Statement heading, e.g. "FY 2025-26",
@@ -179,10 +188,21 @@ public class FinancialReportService {
         return result;
     }
 
+    /**
+     * Drill-down detail for one cell of getCollectionMatrix() above — every
+     * individual PAID payment whose BILLING month is `year-month`. Uses the
+     * same paymentMonth-keyed lookup as the matrix (findByStatusAndPaymentMonthRange
+     * with start == end) so this detail view's total always reconciles with
+     * the matrix cell that links to it, instead of the previous
+     * paymentDate-based lookup which could disagree for installments
+     * collected/verified in a different calendar month than their billing
+     * month.
+     */
     public Map<String, Object> getMonthlyDetail(int year, int month) {
 
-        List<Payment> payments = paymentRepo.findByYearAndMonthAndStatus(
-                year, month, Payment.PaymentStatus.PAID);
+        String monthKey = year + "-" + String.format("%02d", month);
+        List<Payment> payments = paymentRepo.findByStatusAndPaymentMonthRange(
+                Payment.PaymentStatus.PAID, monthKey, monthKey);
 
         payments.sort(Comparator.comparing(p ->
                 p.getPaymentDate() != null ? p.getPaymentDate() : LocalDate.MIN));
@@ -288,14 +308,14 @@ public class FinancialReportService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal cashTotal = runningBalance.subtract(chqTotal);
 
-        double income;
-        if (startMonth <= endMonth) {
-            income = safe(paymentRepo.sumPaidAmountByYearRange(year, startMonth, endMonth));
-        } else {
-            income = safe(paymentRepo.sumPaidAmountByYearRange(year, startMonth, 12))
-                   + safe(paymentRepo.sumPaidAmountByYearRange(year + 1, 1, endMonth));
-        }
-        double prevBal = safe(paymentRepo.sumPaidAmountByYearRange(year, 1, startMonth - 1))
+        // FIX (Task 1 — cross-module collection total consistency): "income"
+        // here must use the same paymentMonth basis as Admin Dashboard /
+        // Maintenance Summary / Paid-Unpaid Details / Financial Summary —
+        // see sumPaidAmountByPaymentMonthRange() for the shared reasoning.
+        // (It already returns a null-safe primitive double — no extra
+        // safe() wrapper needed.)
+        double income = sumPaidAmountByPaymentMonthRange(year, startMonth, endMonth);
+        double prevBal = sumPaidAmountByPaymentMonthRange(year, 1, startMonth - 1)
                        - safe(expenseRepo.sumByYearBeforeMonth(year, startMonth));
 
         String periodLabel;
@@ -334,13 +354,14 @@ public class FinancialReportService {
     // the Collection/Expense report tables on this same screen
     // (FinancialReportController / getCollectionMatrix, startMonth=4).
     //
-    // IMPORTANT — NO CALCULATION LOGIC WAS CHANGED:
-    //   This method does not introduce any new SQL or aggregation rule. It
-    //   only changes *which* 12 (calendar-year, month) pairs are summed and
-    //   in what order they're presented. Every individual month's figure is
-    //   still produced by the exact same, untouched repository calls already
-    //   used elsewhere in this class:
-    //     - paymentRepo.sumPaidAmountByYearAndMonth(y, m)
+    // IMPORTANT — NO OTHER CALCULATION LOGIC WAS CHANGED beyond the Task 1
+    // paymentMonth-basis fix documented at the loop below:
+    //   This method does not introduce any new SQL or aggregation rule
+    //   beyond switching the per-month income lookup from paymentDate to
+    //   paymentMonth (see the loop below). It only changes *which* 12
+    //   (calendar-year, month) pairs are summed and in what order they're
+    //   presented; the underlying queries are:
+    //     - paymentRepo.sumPaidAmountByPaymentMonth(y + "-" + m)
     //     - expenseRepo.sumByYearAndMonth(y, m)
     //   For Calendar Year, those 12 calls were y=year, m=1..12.
     //   For Financial Year, they become:
@@ -365,9 +386,21 @@ public class FinancialReportService {
         double totalExpenses  = 0.0;
         Map<String, Object> monthlySummary = new LinkedHashMap<>();
 
+        // FIX (Task 1 — cross-module collection total consistency):
+        // "income" per month MUST equal Admin Dashboard's "Collected Amount" /
+        // Maintenance Summary's paid total / Paid-Unpaid Details' column
+        // total for that exact same month. Previously summed by
+        // YEAR/MONTH(p.paymentDate) (sumPaidAmountByYearAndMonth) — the
+        // calendar date a payment was actually collected/verified — instead
+        // of p.paymentMonth, the billing month it was paid toward, which let
+        // this exact screen ("Financial Summary") silently diverge from the
+        // others for installments collected/verified in a different
+        // calendar month than their billing month. Now keyed by
+        // paymentMonth via sumPaidAmountByPaymentMonth, same as Dashboard /
+        // Payment Management tracking-stats / Analytics Summary.
         for (int[] ym : fyMonths) {
             int y = ym[0], m = ym[1];
-            double inc = safe(paymentRepo.sumPaidAmountByYearAndMonth(y, m));
+            double inc = safe(paymentRepo.sumPaidAmountByPaymentMonth(y + "-" + String.format("%02d", m)));
             double exp = safe(expenseRepo.sumByYearAndMonth(y, m));
             totalCollected += inc;
             totalExpenses  += exp;
@@ -421,10 +454,30 @@ public class FinancialReportService {
         return result;
     }
 
+    /**
+     * FIX (Task 1 — cross-module collection total consistency):
+     *
+     * "totalCollection" for a given month MUST equal Admin Dashboard's
+     * "Collected Amount" / Maintenance Summary's Flat+Villa paid total /
+     * Paid-Unpaid Details' column total for that exact same month — this
+     * is the User-facing "Financial Summary for [month]" screen
+     * (UserFinancialReport.jsx → /user/financial-report/monthly-summary).
+     *
+     * Previously summed by YEAR/MONTH(p.paymentDate) — the calendar date a
+     * payment was actually collected/verified — instead of p.paymentMonth,
+     * the billing month it was paid toward. Those two can legitimately
+     * differ for partial/installment payments (e.g. a June bill's
+     * remaining balance collected and verified in July), which let this
+     * screen's totals silently diverge from the screens above. Now keyed
+     * by paymentMonth via sumPaidAmountByPaymentMonth /
+     * sumBankPaidByPaymentMonth / sumCashPaidByPaymentMonth — the same
+     * queries Admin Dashboard and Payment Management already use.
+     */
     public Map<String, Object> getMonthlySummary(int year, int month) {
-        double totalCollection = safe(paymentRepo.sumPaidAmountByYearAndMonth(year, month));
-        double bankCollection  = safe(paymentRepo.sumBankCollectedByYearAndMonth(year, month));
-        double cashCollection  = safe(paymentRepo.sumCashCollectedByYearAndMonth(year, month));
+        String paymentMonthKey = year + "-" + String.format("%02d", month);
+        double totalCollection = safe(paymentRepo.sumPaidAmountByPaymentMonth(paymentMonthKey));
+        double bankCollection  = safe(paymentRepo.sumBankPaidByPaymentMonth(paymentMonthKey));
+        double cashCollection  = safe(paymentRepo.sumCashPaidByPaymentMonth(paymentMonthKey));
 
         double bankExpense  = safe(expenseRepo.sumBankExpenseByYearAndMonth(year, month));
         double cashExpense  = safe(expenseRepo.sumCashExpenseByYearAndMonth(year, month));
@@ -448,6 +501,56 @@ public class FinancialReportService {
 
     private double safe(Double v) { return v != null ? v : 0.0; }
     private long   safe(Long   v) { return v != null ? v : 0L; }
+
+    /**
+     * Sums sumPaidAmountByPaymentMonth(...) — the same paymentMonth-keyed,
+     * PAID-only query Admin Dashboard / Maintenance Summary / Paid-Unpaid
+     * Details / Payment Management already use — across a startMonth..endMonth
+     * range of the given calendar year, the paymentMonth equivalent of the
+     * old paymentDate-based sumPaidAmountByYearRange.
+     *
+     * Used everywhere this file previously summed a month range "by
+     * collection date" (income figures, opening/closing balances): grouping
+     * by paymentDate instead of paymentMonth could split one bill's
+     * installments across two different calendar months if a remaining
+     * balance was collected/verified in a later month than it was billed
+     * for, silently diverging from every other screen's totals for the
+     * same billing month — the exact "different value in Financial Summary"
+     * bug this fixes.
+     *
+     * @param endMonth pass 0 to mean "no months at all" (the degenerate
+     *                 "before the period starts" case some callers use,
+     *                 e.g. startMonth=1, endMonth=0 → nothing before
+     *                 January). Any other startMonth > endMonth combination
+     *                 is treated as a genuine cross-year Financial-Year
+     *                 range (e.g. startMonth=4, endMonth=3 → Apr(year)..Mar(year+1)),
+     *                 exactly like getCollectionMatrix()/getExpenseReport()
+     *                 already interpret it — endMonth=0 is the only
+     *                 sentinel value, not "endMonth == startMonth - 1" in
+     *                 general, since that expression is also true for a
+     *                 real one-year-long FY range such as (4, 3).
+     */
+    private double sumPaidAmountByPaymentMonthRange(int year, int startMonth, int endMonth) {
+        if (endMonth < 1) return 0.0; // sentinel: no months in range at all
+
+        double total = 0.0;
+        if (startMonth <= endMonth) {
+            for (int m = startMonth; m <= endMonth; m++) {
+                total += safe(paymentRepo.sumPaidAmountByPaymentMonth(
+                        year + "-" + String.format("%02d", m)));
+            }
+        } else {
+            for (int m = startMonth; m <= 12; m++) {
+                total += safe(paymentRepo.sumPaidAmountByPaymentMonth(
+                        year + "-" + String.format("%02d", m)));
+            }
+            for (int m = 1; m <= endMonth; m++) {
+                total += safe(paymentRepo.sumPaidAmountByPaymentMonth(
+                        (year + 1) + "-" + String.format("%02d", m)));
+            }
+        }
+        return total;
+    }
 
     // Maintenance Amount — single source of truth.
     //

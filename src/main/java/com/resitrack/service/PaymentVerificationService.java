@@ -256,6 +256,35 @@ public class PaymentVerificationService {
             default              -> "UPI";   // GPAY = UPI (existing behaviour preserved)
         };
 
+        // ── Task 2 — re-validate remaining balance at VERIFY time ──────────
+        //
+        // validateRemainingBalance() already runs once when a resident first
+        // submits a GPay/Cash/Bank-Transfer request (submitRequest /
+        // submitCashRequest / submitBankTransferRequest), but it only checks
+        // against payments that are ALREADY VERIFIED (PAID) at that moment —
+        // a still-PENDING request never reduces what a later submission is
+        // allowed to ask for, intentionally, since it might yet be rejected.
+        //
+        // That means two (or more) PENDING requests for the same resident +
+        // month can each individually pass the submission-time check (e.g.
+        // a ₹3000 bill: request A for ₹3000 submitted, then request B for
+        // ₹3000 submitted before A is verified — both pass, since neither
+        // sees the other as PAID yet) and then BOTH get verified here,
+        // producing two PAID Payment rows that together exceed the required
+        // maintenance amount — a duplicate/overpayment exactly like the
+        // admin-recorded-duplicate scenario this task's cleanup targets,
+        // just arriving through the screenshot-verification flow instead.
+        //
+        // Re-checking here, immediately before the PAID Payment row is
+        // created, closes that gap: once any one PENDING request for a
+        // month has been verified, every other still-PENDING request for
+        // that same resident + month is rejected at verify time rather than
+        // being allowed to create a second PAID row. The admin still sees
+        // exactly which request failed and why, and can reject it via the
+        // existing rejectRequest() flow — no other verification mechanics
+        // change.
+        validateRemainingBalanceAtVerification(resident, req.getPaymentMonth(), req.getPaymentAmount());
+
         Payment payment = Payment.builder()
                 .resident(resident)
                 .amount(req.getPaymentAmount())
@@ -355,10 +384,11 @@ public class PaymentVerificationService {
      *
      * Only counts VERIFIED (PAID) payments — a still-PENDING verification
      * request does not reduce what a resident is allowed to submit next,
-     * since it may yet be rejected. This check intentionally lives only at
-     * submission time, not inside verifyRequest()/approvePayment() — the
-     * existing admin verification workflow (approve/reject mechanics, who
-     * can act, receipt generation) is left completely unchanged.
+     * since it may yet be rejected. This check runs at submission time;
+     * Task 2 additionally re-runs the equivalent check at VERIFY time
+     * (validateRemainingBalanceAtVerification(), below) to close the gap
+     * where two still-PENDING requests for the same month could otherwise
+     * both pass this submission-time check and then both be verified.
      */
     private void validateRemainingBalance(Resident resident, BigDecimal requestedAmount) {
         BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
@@ -379,6 +409,52 @@ public class PaymentVerificationService {
             throw new CustomException(
                     "Amount exceeds the remaining balance of " + remaining.setScale(2, java.math.RoundingMode.HALF_UP)
                             + " for this month.", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /**
+     * Task 2 — remaining-balance re-check at VERIFY time (closes the gap
+     * validateRemainingBalance() above intentionally leaves open at
+     * submission time — see the call site in verifyRequest() for the full
+     * scenario this guards against).
+     *
+     * Same formula as validateRemainingBalance(), but:
+     *   - parameterized by the REQUEST's own billing month (paymentMonth),
+     *     not always "this calendar month" — a verification request's
+     *     paymentMonth is set once at submission and an admin can verify it
+     *     in a later calendar month, so the check must gate against the
+     *     month the resident actually billed against, exactly like
+     *     PaymentService.validateRemainingBalance(resident, paymentMonth, amount)
+     *     already does for the Admin Manual Payment Registration flow.
+     *   - throws a clear, admin-facing message identifying this as a
+     *     duplicate rather than a generic "already paid" submission error,
+     *     since the person seeing this message is the admin reviewing a
+     *     verification request, not the resident submitting one.
+     */
+    private void validateRemainingBalanceAtVerification(
+            Resident resident, String paymentMonth, BigDecimal requestedAmount) {
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+        if (required.compareTo(BigDecimal.ZERO) <= 0) return; // nothing configured — nothing to gate
+
+        Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), paymentMonth);
+        BigDecimal totalPaid = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+
+        BigDecimal remaining = required.subtract(totalPaid);
+
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(
+                    "Cannot verify — maintenance for " + paymentMonth + " has already been fully paid " +
+                    "by another verified payment. This request appears to be a duplicate; reject it instead.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        if (requestedAmount.compareTo(remaining) > 0) {
+            throw new CustomException(
+                    "Cannot verify — this amount exceeds the remaining balance of "
+                            + remaining.setScale(2, java.math.RoundingMode.HALF_UP)
+                            + " for " + paymentMonth + ". Another payment may have already been verified " +
+                            "for this month; reject this request if it is a duplicate.",
+                    HttpStatus.BAD_REQUEST);
         }
     }
 

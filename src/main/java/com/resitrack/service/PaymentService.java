@@ -1,6 +1,7 @@
 package com.resitrack.service;
 
 import com.resitrack.dto.AdminPaymentRequest;
+import com.resitrack.dto.DuplicatePaymentGroupDTO;
 import com.resitrack.dto.PaymentRequest;
 import com.resitrack.dto.PaymentResponseDTO;
 import com.resitrack.dto.TransactionLedgerEntryDTO;
@@ -8,6 +9,7 @@ import com.resitrack.entity.*;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.*;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +22,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PaymentService {
@@ -32,6 +35,7 @@ public class PaymentService {
     private final NotificationService    notificationService;
     private final ExpenseRepository      expenseRepo;
     private final BatchPaymentRepository batchPaymentRepo;
+    private final AdminRepository        adminRepo;
 
     private static final List<String> VALID_PAYMENT_MODES = List.of("UPI", "BANK_TRANSFER", "CASH");
 
@@ -42,6 +46,26 @@ public class PaymentService {
         return payments.stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
     }
 
+    /**
+     * Task 2 — re-validate remaining balance at APPROVE time.
+     *
+     * Mirrors the same fix in PaymentVerificationService.verifyRequest():
+     * validateRemainingBalance() (called once in submitForVerification(),
+     * below) only checks against payments that are ALREADY PAID at
+     * submission time — a still-PENDING_VERIFICATION row never reduces what
+     * a later submission is allowed to ask for. Two PENDING_VERIFICATION
+     * rows for the same resident + month can therefore each individually
+     * pass that submission-time check and then both be approved here,
+     * producing two PAID rows that together exceed the required maintenance
+     * amount.
+     *
+     * Re-checking immediately before flipping a row to PAID closes that
+     * gap: once one PENDING_VERIFICATION row for a month has been approved,
+     * approving a second one for the same resident + month is now rejected
+     * here, surfacing as a clear error to the admin instead of silently
+     * creating a duplicate-paid month. The admin can still reject the
+     * duplicate row via the existing rejectPayment() flow.
+     */
     @Transactional
     public PaymentResponseDTO approvePayment(Long paymentId) {
         Payment p = paymentRepo.findById(paymentId)
@@ -49,6 +73,10 @@ public class PaymentService {
 
         if (p.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
             throw new CustomException("Payment is not pending verification", HttpStatus.BAD_REQUEST);
+
+        if (p.getResident() != null && p.getPaymentMonth() != null) {
+            validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
+        }
 
         p.setPaymentStatus(Payment.PaymentStatus.PAID);
         p.setVerificationStatus(Payment.VerificationStatus.VERIFIED);
@@ -407,6 +435,127 @@ public class PaymentService {
                     "Amount exceeds the remaining balance of " + remaining.setScale(2, java.math.RoundingMode.HALF_UP)
                             + " for this month.", HttpStatus.BAD_REQUEST);
         }
+    }
+
+    /**
+     * Task 2 — remaining-balance re-check at APPROVE time. See the call site
+     * in approvePayment() above for the full duplicate-approval scenario
+     * this guards against; mirrors
+     * PaymentVerificationService.validateRemainingBalanceAtVerification()
+     * for the screenshot-based flow.
+     *
+     * sumPaidAmountByPropertyAndPaymentMonth only counts rows already at
+     * paymentStatus = PAID, and the row being approved is still
+     * PENDING_VERIFICATION at the moment this runs (the status flip happens
+     * after this check passes), so it is automatically excluded from
+     * totalPaid here — no separate "exclude this row" logic is needed.
+     */
+    private void validateRemainingBalanceAtApproval(
+            Resident resident, String paymentMonth, BigDecimal requestedAmount) {
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+        if (required.compareTo(BigDecimal.ZERO) <= 0) return; // nothing configured — nothing to gate
+
+        Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), paymentMonth);
+        BigDecimal totalPaid = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+
+        BigDecimal remaining = required.subtract(totalPaid);
+        BigDecimal amount = requestedAmount != null ? requestedAmount : BigDecimal.ZERO;
+
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(
+                    "Cannot approve — maintenance for " + paymentMonth + " has already been fully paid " +
+                    "by another approved payment. This appears to be a duplicate; reject it instead.",
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        if (amount.compareTo(remaining) > 0) {
+            throw new CustomException(
+                    "Cannot approve — this amount exceeds the remaining balance of "
+                            + remaining.setScale(2, java.math.RoundingMode.HALF_UP)
+                            + " for " + paymentMonth + ". Another payment may have already been approved " +
+                            "for this month; reject this one if it is a duplicate.",
+                    HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /**
+     * Task 1 — Duplicate Payment Cleanup (Super Admin only).
+     *
+     * Permanently removes a payment record from the database, and with it
+     * removes that amount from EVERY downstream total, because every
+     * consumer (Admin Dashboard, Maintenance Summary, Paid/Unpaid Details,
+     * Financial Summary, Payment Management) reads straight from the
+     * `payments` table on each request — there is no cached/duplicated copy
+     * of a payment's amount anywhere else to also clean up.
+     *
+     * Restricted to Super Admin (same permission model as
+     * AdminAccountController's destructive admin-account actions): a
+     * regular Admin can view Payment Management but cannot delete payment
+     * records, since deletion is irreversible and directly changes
+     * collection totals shown to everyone.
+     *
+     * The associated Receipt (if one was generated for this payment) is
+     * deleted first and explicitly, rather than relying solely on the
+     * database's ON DELETE CASCADE on receipts.payment_id — this guarantees
+     * the deletion is visible to Hibernate's own session/cache immediately,
+     * not just at the database level, and avoids a stale Receipt read
+     * inside the same transaction.
+     *
+     * @param paymentId   the payment to delete
+     * @param callerEmail the email of the authenticated admin performing
+     *                    the deletion (from the JWT/Authentication), used
+     *                    to verify Super Admin status server-side
+     */
+    @Transactional
+    public void deletePayment(Long paymentId, String callerEmail) {
+        Admin caller = adminRepo.findByEmail(callerEmail)
+                .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
+
+        if (!caller.isSuperAdmin())
+            throw new CustomException(
+                    "Only Super Admin can delete payment records.", HttpStatus.FORBIDDEN);
+
+        Payment payment = paymentRepo.findById(paymentId)
+                .orElseThrow(() -> new CustomException("Payment not found", HttpStatus.NOT_FOUND));
+
+        receiptRepo.findByPaymentId(paymentId).ifPresent(receiptRepo::delete);
+
+        paymentRepo.delete(payment);
+        paymentRepo.flush();
+
+        log.info("Payment {} (resident={}, amount={}, paymentMonth={}) deleted by Super Admin {}",
+                paymentId,
+                payment.getResident() != null ? payment.getResident().getId() : null,
+                payment.getAmount(), payment.getPaymentMonth(), callerEmail);
+    }
+
+    /**
+     * Task 1 — Duplicate Payment Cleanup (read-only report).
+     *
+     * Surfaces every (resident, paymentMonth) combination that currently
+     * has more than one PAID payment row, so a Super Admin can see exactly
+     * which rows are duplicates before deleting the extra one(s) via
+     * deletePayment(). Read-only — identifying duplicates never itself
+     * changes any total.
+     */
+    public List<DuplicatePaymentGroupDTO> getDuplicatePayments() {
+        List<PaymentRepository.DuplicatePaymentGroup> groups = paymentRepo.findDuplicatePaidGroups();
+
+        return groups.stream().map(g -> {
+            Resident r = residentRepo.findById(g.getResidentId()).orElse(null);
+            List<Payment> rows = paymentRepo.findPaidByResidentIdAndPaymentMonth(
+                    g.getResidentId(), g.getPaymentMonth());
+
+            return DuplicatePaymentGroupDTO.builder()
+                    .residentId(g.getResidentId())
+                    .residentName(r != null ? r.getFullName() : "—")
+                    .flatNumber(r != null ? r.getFlatNumber() : "—")
+                    .paymentMonth(g.getPaymentMonth())
+                    .duplicateCount(g.getDuplicateCount())
+                    .totalAmount(g.getTotalAmount())
+                    .payments(rows.stream().map(PaymentResponseDTO::from).collect(Collectors.toList()))
+                    .build();
+        }).collect(Collectors.toList());
     }
 
     private void generateReceipt(Payment payment) {
