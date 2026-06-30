@@ -9,6 +9,7 @@ import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.PaymentVerificationService;
 import com.resitrack.service.ResidentService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.PathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.*;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class PaymentVerificationController {
@@ -182,8 +184,24 @@ public class PaymentVerificationController {
     public ResponseEntity<Resource> getScreenshot(@PathVariable Long id) {
         Path path = verificationService.getScreenshotPath(id);
         Resource resource = new PathResource(path);
-        if (!resource.exists())
-            return ResponseEntity.notFound().build();
+        if (!resource.exists()) {
+            // The DB record and its screenshot_path are present (otherwise
+            // verificationService.getScreenshotPath() would already have
+            // thrown above) — the file itself is missing from disk at the
+            // resolved path. On Render, this happens when the service has
+            // no persistent Disk attached: every redeploy/restart starts
+            // from a fresh container filesystem, discarding anything
+            // previously written to app.upload.dir. See README/deployment
+            // notes for the fix (attach a Render Disk + set UPLOAD_DIR).
+            log.warn("Payment screenshot file missing on disk for request {} — expected at {}",
+                    id, path.toAbsolutePath());
+            throw new CustomException(
+                    "This payment screenshot is no longer available on the server. " +
+                    "It may have been uploaded before the most recent deployment and the " +
+                    "file storage was not persistent across that restart. " +
+                    "Ask the resident to re-upload the payment proof.",
+                    HttpStatus.NOT_FOUND);
+        }
 
         String filename = path.getFileName().toString().toLowerCase();
         MediaType mediaType = filename.endsWith(".pdf")
