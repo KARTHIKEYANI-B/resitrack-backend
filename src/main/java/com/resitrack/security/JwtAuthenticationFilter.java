@@ -47,6 +47,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (StringUtils.hasText(header) && header.startsWith("Bearer ")) {
             return header.substring(7);
         }
+
+        // Fallback for requests that cannot attach a custom header — e.g. a
+        // browser navigating directly to a protected resource URL via
+        // <img src>, <a href target="_blank">, "open image in new tab",
+        // or a copy-pasted link (the payment-proof screenshot endpoint is
+        // the motivating case). The token still goes through the exact same
+        // validateToken()/loadUserByUsername()/role-authority pipeline below
+        // as header-based auth, so no endpoint becomes less protected —
+        // this only changes *how* a valid token can be presented.
+        String queryToken = request.getParameter("token");
+        if (StringUtils.hasText(queryToken)) {
+            return queryToken;
+        }
+
         return null;
     }
 }
