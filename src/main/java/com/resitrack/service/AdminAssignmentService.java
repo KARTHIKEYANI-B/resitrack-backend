@@ -10,6 +10,7 @@ import com.resitrack.repository.AdminAssignmentRepository;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.MemberRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -136,6 +137,18 @@ public class AdminAssignmentService {
         }
 
         positionAdmin.setResidentId(resident.getId());
+
+        // ── Admin-transfer phone sync ───────────────────────────────────────
+        // Admin.phone is a denormalized login credential, not a foreign key —
+        // it must always reflect whoever currently holds this position so
+        // phone-number login resolves to the *current* admin. Without this,
+        // the previous position-holder's phone number would keep working as
+        // an Admin login (a stale mapping) even after someone else has been
+        // appointed, and the newly appointed admin's own phone would NOT yet
+        // work for Admin login until an unrelated Members List edit happened
+        // to trigger the sync in MemberService.updateMember().
+        positionAdmin.setPhone(PhoneNormalizer.normalize(resident.getPhone()));
+
         adminRepo.save(positionAdmin);
 
         AdminAssignment assignment = AdminAssignment.builder()
@@ -189,6 +202,13 @@ public class AdminAssignmentService {
 
         Admin positionAdmin = assignment.getAdmin();
         positionAdmin.setResidentId(null);
+
+        // Clear the denormalized login phone along with the resident link so
+        // the outgoing admin's phone number stops resolving to this Admin
+        // account. It will be re-synced to whoever is appointed next (see
+        // appoint() above); until then the position has no phone-login.
+        positionAdmin.setPhone(null);
+
         adminRepo.save(positionAdmin);
 
         memberRepo.findByPosition(assignment.getPosition()).ifPresent(member -> {

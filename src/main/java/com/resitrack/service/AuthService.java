@@ -51,13 +51,36 @@ public class AuthService {
         String normalizedPhone = PhoneNormalizer.normalize(identifier);
         String password        = req.getPassword();
 
+        // ── Cross-role identifier collisions ────────────────────────────────
+        // A phone number is only guaranteed unique *within* the residents
+        // table. An Admin account's phone is a denormalized copy synced from
+        // whichever resident currently holds that committee position (see
+        // AdminAssignmentService.appoint / MemberService.updateMember), so the
+        // SAME phone number can legitimately exist on both an Admin row and a
+        // Resident row at once — e.g. an Owner who is also the Secretary.
+        //
+        // Previously, the first role whose findByEmail/findByPhone matched
+        // "won" outright: if that role's password check failed we threw
+        // "Invalid credentials" immediately, even though a *different* role
+        // sharing the same identifier and the password the person actually
+        // typed existed further down the chain (typically the Owner account,
+        // checked after Admin). That meant an Owner+Admin with a shared phone
+        // could never log in with their Owner password.
+        //
+        // Fix: identifier matching a role no longer short-circuits the whole
+        // login. Only a *correct password* for that role's account counts as
+        // a match; otherwise we fall through and keep checking the remaining
+        // roles in the same priority order as before. "Invalid credentials"
+        // is now only thrown once none of the matching accounts accept the
+        // supplied password. Role-specific post-auth checks (security guard
+        // active flag, resident approval/active status, etc.) are unchanged
+        // and still only run once a password has actually matched.
+
         // 1. Admin check (email or phone)
         Admin admin = adminRepo.findByEmail(identifier)
                 .or(() -> findByNormalizedPhone(adminRepo::findByPhone, normalizedPhone))
                 .orElse(null);
-        if (admin != null) {
-            if (!passwordEncoder.matches(password, admin.getPassword()))
-                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+        if (admin != null && passwordEncoder.matches(password, admin.getPassword())) {
             return buildAdminResponse(admin);
         }
 
@@ -65,9 +88,7 @@ public class AuthService {
         SecurityGuard guard = securityGuardRepo.findByEmail(identifier)
                 .or(() -> findByNormalizedPhone(securityGuardRepo::findByPhone, normalizedPhone))
                 .orElse(null);
-        if (guard != null) {
-            if (!passwordEncoder.matches(password, guard.getPassword()))
-                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+        if (guard != null && passwordEncoder.matches(password, guard.getPassword())) {
             if (!guard.isActive())
                 throw new CustomException(
                         "INACTIVE:Your security account has been deactivated. Contact the admin.",
@@ -75,24 +96,21 @@ public class AuthService {
             return buildSecurityResponse(guard);
         }
 
-        // 3. Resident / Family Member check (email or phone — login credentials)
+        // 3. Resident / Owner check (email or phone — login credentials)
         Resident r = residentRepo.findByEmail(identifier)
                 .or(() -> findByNormalizedPhone(residentRepo::findByPhone, normalizedPhone))
                 .orElse(null);
-        if (r != null) {
-            if (!passwordEncoder.matches(password, r.getPassword()))
-                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+        if (r != null && passwordEncoder.matches(password, r.getPassword())) {
             return buildResidentResponse(r);
         }
 
+        // 4. Family Member check (personal email or phone on the family_members row)
         Resident fmLoginAccount = resolveFamilyMemberLoginByPersonalContact(identifier);
-        if (fmLoginAccount != null) {
-            if (!passwordEncoder.matches(password, fmLoginAccount.getPassword()))
-                throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
+        if (fmLoginAccount != null && passwordEncoder.matches(password, fmLoginAccount.getPassword())) {
             return buildResidentResponse(fmLoginAccount);
         }
 
-        // Nothing matched
+        // Nothing matched an identifier+password pair across any role
         throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
     }
 
