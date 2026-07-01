@@ -82,7 +82,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/members/**").hasRole("ADMIN")
 
                 // Role-specific dashboard endpoints (unchanged)
-                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .requestMatchers("/user/**").hasRole("USER")
                 .requestMatchers("/security/**").hasRole("SECURITY")
 
