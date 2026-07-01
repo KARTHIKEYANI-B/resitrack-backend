@@ -9,6 +9,7 @@ import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.MemberRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
@@ -113,7 +114,7 @@ public class MemberService {
         if (member.getResident() != null) {
             adminRepo.findByResidentId(member.getResident().getId()).ifPresent(admin -> {
                 if (req.getName() != null) admin.setName(req.getName());
-                if (req.getPhoneNumber() != null) admin.setPhone(req.getPhoneNumber());
+                if (req.getPhoneNumber() != null) admin.setPhone(PhoneNormalizer.normalize(req.getPhoneNumber()));
                 adminRepo.save(admin);
             });
         }

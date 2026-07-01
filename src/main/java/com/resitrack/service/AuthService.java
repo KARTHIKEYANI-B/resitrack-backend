@@ -14,6 +14,7 @@ import com.resitrack.repository.ResidentRepository;
 import com.resitrack.repository.SecurityGuardRepository;
 import com.resitrack.repository.VehicleRepository;
 import com.resitrack.security.JwtTokenProvider;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -24,6 +25,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.Function;
 
 @Slf4j
 @Service
@@ -44,12 +47,13 @@ public class AuthService {
             DateTimeFormatter.ofPattern("dd-MMM-yyyy hh:mm a");
 
     public JwtResponse unifiedLogin(LoginRequest req) {
-        String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
-        String password   = req.getPassword();
+        String identifier     = req.getEmail() != null ? req.getEmail().trim() : "";
+        String normalizedPhone = PhoneNormalizer.normalize(identifier);
+        String password        = req.getPassword();
 
         // 1. Admin check (email or phone)
         Admin admin = adminRepo.findByEmail(identifier)
-                .or(() -> adminRepo.findByPhone(identifier))
+                .or(() -> findByNormalizedPhone(adminRepo::findByPhone, normalizedPhone))
                 .orElse(null);
         if (admin != null) {
             if (!passwordEncoder.matches(password, admin.getPassword()))
@@ -59,7 +63,7 @@ public class AuthService {
 
         // 2. Security guard check (email or phone)
         SecurityGuard guard = securityGuardRepo.findByEmail(identifier)
-                .or(() -> securityGuardRepo.findByPhone(identifier))
+                .or(() -> findByNormalizedPhone(securityGuardRepo::findByPhone, normalizedPhone))
                 .orElse(null);
         if (guard != null) {
             if (!passwordEncoder.matches(password, guard.getPassword()))
@@ -73,7 +77,7 @@ public class AuthService {
 
         // 3. Resident / Family Member check (email or phone — login credentials)
         Resident r = residentRepo.findByEmail(identifier)
-                .or(() -> residentRepo.findByPhone(identifier))
+                .or(() -> findByNormalizedPhone(residentRepo::findByPhone, normalizedPhone))
                 .orElse(null);
         if (r != null) {
             if (!passwordEncoder.matches(password, r.getPassword()))
@@ -94,10 +98,11 @@ public class AuthService {
 
     // ── Admin Login (unchanged — kept for backward compat) ────────────────
     public JwtResponse adminLogin(LoginRequest req) {
-        String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
+        String identifier      = req.getEmail() != null ? req.getEmail().trim() : "";
+        String normalizedPhone = PhoneNormalizer.normalize(identifier);
 
         Admin admin = adminRepo.findByEmail(identifier)
-                .or(() -> adminRepo.findByPhone(identifier))
+                .or(() -> findByNormalizedPhone(adminRepo::findByPhone, normalizedPhone))
                 .orElseThrow(() -> new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED));
 
         if (!passwordEncoder.matches(req.getPassword(), admin.getPassword()))
@@ -108,10 +113,11 @@ public class AuthService {
 
     // ── Security Guard Login (added alongside security module) ────────────
     public JwtResponse securityLogin(LoginRequest req) {
-        String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
+        String identifier      = req.getEmail() != null ? req.getEmail().trim() : "";
+        String normalizedPhone = PhoneNormalizer.normalize(identifier);
 
         SecurityGuard guard = securityGuardRepo.findByEmail(identifier)
-                .or(() -> securityGuardRepo.findByPhone(identifier))
+                .or(() -> findByNormalizedPhone(securityGuardRepo::findByPhone, normalizedPhone))
                 .orElseThrow(() -> new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED));
 
         if (!passwordEncoder.matches(req.getPassword(), guard.getPassword()))
@@ -127,10 +133,11 @@ public class AuthService {
 
     // ── Resident / Family Member Login (unchanged — kept for backward compat)
     public JwtResponse userLogin(LoginRequest req) {
-        String identifier = req.getEmail() != null ? req.getEmail().trim() : "";
+        String identifier      = req.getEmail() != null ? req.getEmail().trim() : "";
+        String normalizedPhone = PhoneNormalizer.normalize(identifier);
 
         Resident r = residentRepo.findByEmail(identifier)
-                .or(() -> residentRepo.findByPhone(identifier))
+                .or(() -> findByNormalizedPhone(residentRepo::findByPhone, normalizedPhone))
                 .orElse(null);
 
         if (r == null) {
@@ -154,8 +161,9 @@ public class AuthService {
         if (residentRepo.existsByEmail(req.getEmail()))
             throw new CustomException("Email is already registered.", HttpStatus.CONFLICT);
 
-        if (req.getPhone() != null && !req.getPhone().isBlank()
-                && residentRepo.existsByPhone(req.getPhone()))
+        String normalizedPhone = PhoneNormalizer.normalize(req.getPhone());
+
+        if (normalizedPhone != null && residentRepo.existsByPhone(normalizedPhone))
             throw new CustomException("Phone number is already registered.", HttpStatus.CONFLICT);
 
         if (req.getFlatNumber() != null && !req.getFlatNumber().isBlank()
@@ -165,7 +173,7 @@ public class AuthService {
         Resident.ResidentBuilder builder = Resident.builder()
                 .fullName(req.getFullName().trim())
                 .email(req.getEmail().trim().toLowerCase())
-                .phone(req.getPhone() != null ? req.getPhone().trim() : null)
+                .phone(normalizedPhone)
                 .password(passwordEncoder.encode(req.getPassword()))
                 .flatNumber(req.getFlatNumber() != null
                         ? req.getFlatNumber().trim().toUpperCase() : null)
@@ -219,8 +227,9 @@ public class AuthService {
         if (residentRepo.existsByEmail(req.getEmail()))
             throw new CustomException("Email is already registered.", HttpStatus.CONFLICT);
 
-        if (req.getPhone() != null && !req.getPhone().isBlank()
-                && residentRepo.existsByPhone(req.getPhone()))
+        String normalizedPhone = PhoneNormalizer.normalize(req.getPhone());
+
+        if (normalizedPhone != null && residentRepo.existsByPhone(normalizedPhone))
             throw new CustomException("Phone number is already registered.", HttpStatus.CONFLICT);
 
         if (req.getFlatNumber() != null && !req.getFlatNumber().isBlank()
@@ -230,7 +239,7 @@ public class AuthService {
         Resident.ResidentBuilder builder = Resident.builder()
                 .fullName(req.getFullName().trim())
                 .email(req.getEmail().trim().toLowerCase())
-                .phone(req.getPhone() != null ? req.getPhone().trim() : null)
+                .phone(normalizedPhone)
                 .password(passwordEncoder.encode(req.getPassword()))
                 .flatNumber(req.getFlatNumber() != null
                         ? req.getFlatNumber().trim().toUpperCase() : null)
@@ -434,11 +443,26 @@ public class AuthService {
         FamilyMember fm = familyMemberRepo.findByEmailAndHasAppAccessTrue(identifier).orElse(null);
 
         if (fm == null) {
-            fm = familyMemberRepo.findByPhoneAndHasAppAccessTrue(identifier).orElse(null);
+            String normalizedPhone = PhoneNormalizer.normalize(identifier);
+            if (normalizedPhone != null) {
+                fm = familyMemberRepo.findByPhoneAndHasAppAccessTrue(normalizedPhone).orElse(null);
+            }
         }
 
         if (fm == null || fm.getUserId() == null) return null;
 
         return residentRepo.findById(fm.getUserId()).orElse(null);
+    }
+
+    /**
+     * Runs a repository's findByPhone(...) lookup only when the identifier
+     * actually normalized to something phone-shaped. Centralizes the
+     * null-guard so every login path treats "identifier wasn't a phone
+     * number at all" the same way (skip the lookup) instead of querying
+     * with a null/blank value.
+     */
+    private <T> Optional<T> findByNormalizedPhone(
+            Function<String, Optional<T>> findByPhone, String normalizedPhone) {
+        return normalizedPhone != null ? findByPhone.apply(normalizedPhone) : Optional.empty();
     }
 }

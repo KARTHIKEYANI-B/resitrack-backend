@@ -7,6 +7,7 @@ import com.resitrack.dto.TransactionLedgerEntryDTO;
 import com.resitrack.entity.*;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.*;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -321,7 +322,7 @@ public class PaymentService {
                 throw new CustomException("Invalid payment method. Use: UPI, BANK_TRANSFER, CASH", HttpStatus.BAD_REQUEST);
         }
 
-        Resident resident = residentRepo.findByPhone(req.getOwnerPhone().trim())
+        Resident resident = residentRepo.findByPhone(PhoneNormalizer.normalize(req.getOwnerPhone()))
                 .orElseThrow(() -> new CustomException(
                         "No registered resident found with this phone number", HttpStatus.NOT_FOUND));
 

@@ -7,6 +7,7 @@ import com.resitrack.entity.Resident;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.FamilyMemberRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -63,7 +64,7 @@ public class FamilyMemberService {
                 .name(req.getName().trim())
                 .relationship(relationship)
                 .age(req.getAge())
-                .phone(req.getPhone() != null ? req.getPhone().trim() : null)
+                .phone(PhoneNormalizer.normalize(req.getPhone()))
                 .email(req.getEmail() != null ? req.getEmail().trim().toLowerCase() : null)
                 .hasAppAccess(false)
                 .active(true)
@@ -89,7 +90,7 @@ public class FamilyMemberService {
         String oldPhone = fm.getPhone();
         String newPhone = null;
         if (req.getPhone() != null) {
-            newPhone = req.getPhone().trim();
+            newPhone = PhoneNormalizer.normalize(req.getPhone());
             fm.setPhone(newPhone);
         }
 
@@ -168,13 +169,13 @@ public class FamilyMemberService {
         String regNum = "FM-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
         String loginPhone = null;
-        if (fm.getPhone() != null && !fm.getPhone().isBlank()) {
-            String trimmedPhone = fm.getPhone().trim();
-            if (!residentRepo.existsByPhone(trimmedPhone)) {
-                loginPhone = trimmedPhone;
+        String normalizedFmPhone = PhoneNormalizer.normalize(fm.getPhone());
+        if (normalizedFmPhone != null) {
+            if (!residentRepo.existsByPhone(normalizedFmPhone)) {
+                loginPhone = normalizedFmPhone;
             } else {
                 log.warn("Phone {} already registered to another account — FM {} will use email login only",
-                        trimmedPhone, memberId);
+                        normalizedFmPhone, memberId);
             }
         }
 

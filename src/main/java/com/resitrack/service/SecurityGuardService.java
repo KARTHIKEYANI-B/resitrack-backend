@@ -9,6 +9,7 @@ import com.resitrack.exception.CustomException;
 import com.resitrack.repository.FamilyMemberRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.repository.SecurityGuardRepository;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -37,24 +38,25 @@ public class SecurityGuardService {
             throw new CustomException("Password must be at least 6 characters", HttpStatus.BAD_REQUEST);
 
         boolean hasEmail = req.getEmail() != null && !req.getEmail().isBlank();
-        boolean hasPhone = req.getPhone() != null && !req.getPhone().isBlank();
+        String normalizedPhone = PhoneNormalizer.normalize(req.getPhone());
+        boolean hasPhone = normalizedPhone != null;
         if (!hasEmail && !hasPhone)
             throw new CustomException("Email or Phone is required", HttpStatus.BAD_REQUEST);
 
         String normalEmail = hasEmail
                 ? req.getEmail().trim().toLowerCase()
-                : "security." + req.getPhone().trim() + "@resitrack.internal";
+                : "security." + normalizedPhone + "@resitrack.internal";
 
         if (guardRepo.existsByEmail(normalEmail))
             throw new CustomException("Email already in use by another security account", HttpStatus.CONFLICT);
 
-        if (hasPhone && guardRepo.existsByPhone(req.getPhone().trim()))
+        if (hasPhone && guardRepo.existsByPhone(normalizedPhone))
             throw new CustomException("Phone number already in use by another security account", HttpStatus.CONFLICT);
 
         SecurityGuard guard = SecurityGuard.builder()
                 .name(req.getName().trim())
                 .email(normalEmail)
-                .phone(hasPhone ? req.getPhone().trim() : null)
+                .phone(hasPhone ? normalizedPhone : null)
                 .password(passwordEncoder.encode(req.getPassword()))
                 .active(true)
                 .createdByAdminId(adminId)
@@ -80,8 +82,8 @@ public class SecurityGuardService {
             guard.setName(req.getName().trim());
 
         if (req.getPhone() != null && !req.getPhone().isBlank()) {
-            String newPhone = req.getPhone().trim();
-            if (!newPhone.equals(guard.getPhone()) && guardRepo.existsByPhone(newPhone))
+            String newPhone = PhoneNormalizer.normalize(req.getPhone());
+            if (newPhone != null && !newPhone.equals(guard.getPhone()) && guardRepo.existsByPhone(newPhone))
                 throw new CustomException("Phone number already in use", HttpStatus.CONFLICT);
             guard.setPhone(newPhone);
         }

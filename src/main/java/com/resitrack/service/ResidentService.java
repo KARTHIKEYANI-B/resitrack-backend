@@ -11,6 +11,7 @@ import com.resitrack.repository.FamilyMemberRepository;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.repository.VehicleRepository;
+import com.resitrack.util.PhoneNormalizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -58,7 +59,7 @@ public class ResidentService {
                 .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
 
         if (dto.getFullName()       != null) r.setFullName(dto.getFullName());
-        if (dto.getPhone()          != null) r.setPhone(dto.getPhone());
+        if (dto.getPhone()          != null) r.setPhone(PhoneNormalizer.normalize(dto.getPhone()));
         if (dto.getSquareFeet()     != null) r.setSqFt(dto.getSquareFeet());
         if (dto.getEmail()          != null) {
             r.setAdminEmail(dto.getEmail());
@@ -87,7 +88,7 @@ public class ResidentService {
                 .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
 
         if (dto.getFullName()       != null) r.setFullName(dto.getFullName());
-        if (dto.getPhone()          != null) r.setPhone(dto.getPhone());
+        if (dto.getPhone()          != null) r.setPhone(PhoneNormalizer.normalize(dto.getPhone()));
         if (dto.getAddress()        != null) r.setAddress(dto.getAddress());
         if (dto.getVehicleDetails() != null) r.setVehicleDetails(dto.getVehicleDetails());
 
