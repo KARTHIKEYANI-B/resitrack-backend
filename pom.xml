@@ -25,6 +25,13 @@
 
   <dependencies>
 
+    <!-- CLOUDINARY (media storage — replaces local filesystem uploads) -->
+    <dependency>
+      <groupId>com.cloudinary</groupId>
+      <artifactId>cloudinary-http44</artifactId>
+      <version>1.39.0</version>
+    </dependency>
+
     <!-- SPRING BOOT WEB -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

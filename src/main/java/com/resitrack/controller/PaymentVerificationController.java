@@ -4,15 +4,13 @@ import com.resitrack.dto.ApiResponse;
 import com.resitrack.dto.PaymentVerificationRequestDTO;
 import com.resitrack.entity.Admin;
 import com.resitrack.entity.Resident;
-import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.PaymentVerificationService;
 import com.resitrack.service.ResidentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.PathResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.*;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -20,7 +18,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -179,38 +176,9 @@ public class PaymentVerificationController {
                 "Payment request rejected", verificationService.rejectRequest(id, reason)));
     }
 
-    @GetMapping("/admin/payment-verification/{id}/screenshot")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<Resource> getScreenshot(@PathVariable Long id) {
-        Path path = verificationService.getScreenshotPath(id);
-        Resource resource = new PathResource(path);
-        if (!resource.exists()) {
-            // The DB record and its screenshot_path are present (otherwise
-            // verificationService.getScreenshotPath() would already have
-            // thrown above) — the file itself is missing from disk at the
-            // resolved path. On Render, this happens when the service has
-            // no persistent Disk attached: every redeploy/restart starts
-            // from a fresh container filesystem, discarding anything
-            // previously written to app.upload.dir. See README/deployment
-            // notes for the fix (attach a Render Disk + set UPLOAD_DIR).
-            log.warn("Payment screenshot file missing on disk for request {} — expected at {}",
-                    id, path.toAbsolutePath());
-            throw new CustomException(
-                    "This payment screenshot is no longer available on the server. " +
-                    "It may have been uploaded before the most recent deployment and the " +
-                    "file storage was not persistent across that restart. " +
-                    "Ask the resident to re-upload the payment proof.",
-                    HttpStatus.NOT_FOUND);
-        }
-
-        String filename = path.getFileName().toString().toLowerCase();
-        MediaType mediaType = filename.endsWith(".pdf")
-                ? MediaType.APPLICATION_PDF : MediaType.IMAGE_JPEG;
-
-        return ResponseEntity.ok()
-                .contentType(mediaType)
-                .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "inline; filename=\"" + path.getFileName() + "\"")
-                .body(resource);
-    }
+    // Screenshot retrieval no longer needs a backend proxy endpoint: every
+    // PaymentVerificationRequestDTO already carries `screenshotUrl`, which is
+    // Cloudinary's permanent secure_url. The admin frontend renders that URL
+    // directly (<img src={request.screenshotUrl}>), so there is nothing left
+    // for the backend to stream from disk.
 }

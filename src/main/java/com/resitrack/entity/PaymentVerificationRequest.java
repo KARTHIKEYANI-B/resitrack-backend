@@ -49,8 +49,13 @@ public class PaymentVerificationRequest {
     @Column(name = "bank_name", length = 100)
     private String bankName;
 
-    @Column(name = "screenshot_path", length = 500)
-    private String screenshotPath;
+    /** Cloudinary secure_url — permanent, publicly-resolvable HTTPS URL. */
+    @Column(name = "screenshot_url", length = 500)
+    private String screenshotUrl;
+
+    /** Cloudinary public_id — kept so the asset can be deleted/managed later. */
+    @Column(name = "screenshot_public_id", length = 200)
+    private String screenshotPublicId;
 
     @Column(name = "screenshot_file_name")
     private String screenshotFileName;

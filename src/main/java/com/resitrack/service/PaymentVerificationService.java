@@ -6,7 +6,6 @@ import com.resitrack.exception.CustomException;
 import com.resitrack.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,7 +13,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.file.*;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -33,16 +31,9 @@ public class PaymentVerificationService {
     private final NotificationService                  notificationService;
     private final AdminRepository                      adminRepo;
     private final FamilyMemberRepository               familyMemberRepo;
+    private final CloudinaryService                    cloudinaryService;
 
-    @Value("${app.upload.dir:./uploads}")
-    private String uploadDir;
-
-    @Value("${app.base-url:http://localhost:8080}")
-    private String baseUrl;
-
-    private static final long   MAX_BYTES      = 10L * 1024 * 1024; // 10 MB
-    private static final Set<String> ALLOWED   = Set.of(
-            "image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf");
+    private static final String CLOUDINARY_FOLDER = "resitrack/payments";
 
     @Transactional
     public PaymentVerificationRequestDTO submitRequest(
@@ -64,10 +55,13 @@ public class PaymentVerificationService {
         if (transactionId == null || transactionId.isBlank())
             throw new CustomException("Transaction ID is required", HttpStatus.BAD_REQUEST);
 
-        String screenshotPath = null;
+        String screenshotUrl = null;
+        String screenshotPublicId = null;
         String screenshotFileName = null;
         if (screenshot != null && !screenshot.isEmpty()) {
-            screenshotPath     = saveScreenshot(screenshot);
+            CloudinaryService.UploadResult uploaded = cloudinaryService.upload(screenshot, CLOUDINARY_FOLDER);
+            screenshotUrl      = uploaded.secureUrl();
+            screenshotPublicId = uploaded.publicId();
             screenshotFileName = screenshot.getOriginalFilename();
         }
 
@@ -81,7 +75,8 @@ public class PaymentVerificationService {
                 .phoneNumber(phoneNumber != null ? phoneNumber : resident.getPhone())
                 .paymentAmount(paymentAmount)
                 .transactionId(transactionId.trim())
-                .screenshotPath(screenshotPath)
+                .screenshotUrl(screenshotUrl)
+                .screenshotPublicId(screenshotPublicId)
                 .screenshotFileName(screenshotFileName)
                 .paymentMonth(currentMonth)
                 .paymentMethod("GPAY")
@@ -125,7 +120,8 @@ public class PaymentVerificationService {
                 .phoneNumber(phoneNumber != null ? phoneNumber : resident.getPhone())
                 .paymentAmount(paymentAmount)
                 .transactionId(null)   // CASH has no transaction ID
-                .screenshotPath(null)
+                .screenshotUrl(null)
+                .screenshotPublicId(null)
                 .screenshotFileName(null)
                 .paymentMonth(currentMonth)
                 .paymentMethod("CASH")
@@ -166,10 +162,13 @@ public class PaymentVerificationService {
             throw new CustomException("Reference / Transaction ID is required for bank transfer",
                     HttpStatus.BAD_REQUEST);
 
-        String screenshotPath = null;
+        String screenshotUrl = null;
+        String screenshotPublicId = null;
         String screenshotFileName = null;
         if (screenshot != null && !screenshot.isEmpty()) {
-            screenshotPath     = saveScreenshot(screenshot);
+            CloudinaryService.UploadResult uploaded = cloudinaryService.upload(screenshot, CLOUDINARY_FOLDER);
+            screenshotUrl      = uploaded.secureUrl();
+            screenshotPublicId = uploaded.publicId();
             screenshotFileName = screenshot.getOriginalFilename();
         }
 
@@ -183,7 +182,8 @@ public class PaymentVerificationService {
                 .phoneNumber(phoneNumber != null ? phoneNumber : resident.getPhone())
                 .paymentAmount(paymentAmount)
                 .transactionId(referenceId.trim())
-                .screenshotPath(screenshotPath)
+                .screenshotUrl(screenshotUrl)
+                .screenshotPublicId(screenshotPublicId)
                 .screenshotFileName(screenshotFileName)
                 .paymentMonth(currentMonth)
                 .paymentMethod("BANK_TRANSFER")
@@ -337,14 +337,6 @@ public class PaymentVerificationService {
         return toDTO(req);
     }
 
-    public Path getScreenshotPath(Long requestId) {
-        PaymentVerificationRequest req = verificationRepo.findById(requestId)
-                .orElseThrow(() -> new CustomException("Request not found", HttpStatus.NOT_FOUND));
-        if (req.getScreenshotPath() == null)
-            throw new CustomException("No screenshot attached to this request", HttpStatus.NOT_FOUND);
-        return Paths.get(uploadDir).resolve(req.getScreenshotPath());
-    }
-
     private Resident resolveOwner(Long residentId) {
         Resident resident = residentRepo.findById(residentId)
                 .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
@@ -459,27 +451,6 @@ public class PaymentVerificationService {
     }
 
 
-    private String saveScreenshot(MultipartFile file) throws IOException {
-        if (file.getSize() > MAX_BYTES)
-            throw new CustomException("Screenshot too large. Maximum 10 MB.", HttpStatus.BAD_REQUEST);
-
-        String ct = file.getContentType() != null ? file.getContentType().toLowerCase() : "";
-        if (!ALLOWED.contains(ct))
-            throw new CustomException(
-                    "Invalid file type. Allowed: JPG, PNG, WEBP, PDF", HttpStatus.BAD_REQUEST);
-
-        String original = file.getOriginalFilename() != null ? file.getOriginalFilename() : "screenshot";
-        String ext = original.contains(".")
-                ? original.substring(original.lastIndexOf('.'))
-                : ".jpg";
-        String filename = "payment-screenshots/" + UUID.randomUUID() + ext;
-
-        Path dest = Paths.get(uploadDir).resolve(filename);
-        Files.createDirectories(dest.getParent());
-        Files.copy(file.getInputStream(), dest, StandardCopyOption.REPLACE_EXISTING);
-        return filename;
-    }
-
     private void generateReceipt(Payment payment) {
         if (receiptRepo.findByPaymentId(payment.getId()).isPresent()) return;
 
@@ -510,12 +481,9 @@ public class PaymentVerificationService {
     }
 
     private PaymentVerificationRequestDTO toDTO(PaymentVerificationRequest r) {
-        String url = null;
-        if (r.getScreenshotPath() != null) {
-            url = baseUrl + "/api/admin/payment-verification/" + r.getId() + "/screenshot";
-        }
-
-        PaymentVerificationRequestDTO dto = PaymentVerificationRequestDTO.from(r, url);
+        // Cloudinary's secure_url is already a permanent, publicly-resolvable
+        // HTTPS URL — no proxy endpoint or local-disk lookup needed.
+        PaymentVerificationRequestDTO dto = PaymentVerificationRequestDTO.from(r, r.getScreenshotUrl());
 
         Resident owner = r.getResident(); // always the property owner
 
