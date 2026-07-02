@@ -56,6 +56,12 @@
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
 
+    <!-- MAIL (Brevo SMTP — temporary SMTP test endpoint, then Forgot Password) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-mail</artifactId>
+    </dependency>
+
     <!-- MYSQL -->
     <dependency>
       <groupId>com.mysql</groupId>
