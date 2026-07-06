@@ -33,16 +33,6 @@ public class PaymentController {
         return ResponseEntity.ok(paymentService.getAllPayments(status));
     }
 
-    /**
-     * POST /admin/payments — Admin Manual Payment Registration.
-     *
-     * Lets an Admin/Super Admin record a monthly maintenance payment on an
-     * owner's behalf (cash collected in person, a bank transfer confirmed
-     * outside the app, etc.). Matches the frontend's
-     * adminAPI.createAdminPayment(data) call in PaymentTracking.jsx, which
-     * was previously POSTing to this exact path with no matching mapping —
-     * hence "Request method 'POST' is not supported".
-     */
     @PostMapping("/admin/payments")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> createAdminPayment(
@@ -54,28 +44,6 @@ public class PaymentController {
         return ResponseEntity.ok(ApiResponse.success(message, p));
     }
 
-    /**
-     * GET /admin/payments/tracking-stats
-     *
-     * Task 1 — corrected Pending Dues formula:
-     *
-     *   annualPendingDues = totalExpectedYTD − totalCollectedYTD
-     *
-     * where:
-     *   totalExpectedYTD  = activeOwners × maintAmountPerOwner × completedMonths
-     *                       (Jan … previous calendar month, inclusive)
-     *   totalCollectedYTD = SUM of all PAID payments Jan … previousMonth of current year
-     *
-     * "Completed months" = months from January up to (but NOT including) the current
-     *  calendar month, because the current month is still in progress.
-     *  Example: if today is June, completedMonths = 5 (Jan–May).
-     *
-     * This replaces the old formula: unpaidOwners × flatMaintAmount  (wrong because
-     * it was month-only, not year-based, and did not subtract actual collections).
-     *
-     * The existing fields (paidOwners, unpaidOwners, totalCollectedThisMonth, etc.)
-     * are unchanged — only totalPendingAmount and the three new annual fields change.
-     */
     @GetMapping("/admin/payments/tracking-stats")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentTrackingStatsDTO>> getTrackingStats() {
@@ -99,23 +67,6 @@ public class PaymentController {
                 Payment.PaymentStatus.OVERDUE, currentMonthStr);
 
         long unpaidOwners = Math.max(0, activeOwners - paidOwners);
-
-        // ── Current-month collection ──────────────────────────────────────
-        //
-        // FIX (Task 1 — cross-module collection total consistency):
-        // Previously used sumPaidAmountByYearAndMonth / sumBankCollectedByYearAndMonth
-        // / sumCashCollectedByYearAndMonth, which filter by YEAR/MONTH(p.paymentDate)
-        // — the calendar date a payment was actually collected/verified — instead of
-        // p.paymentMonth, the billing month it was paid toward. Those two can
-        // legitimately differ for partial/installment payments (e.g. a June bill's
-        // remaining balance collected and verified in July), which let "Total
-        // Collected This Month" on this page (Payment Management) silently diverge
-        // from Admin Dashboard / Maintenance Summary / Paid-Unpaid Details, all of
-        // which already key strictly off p.paymentMonth via
-        // sumPaidAmountByPropertyAndPaymentMonth. Now uses the same paymentMonth-keyed
-        // queries (sumPaidAmountByPaymentMonth / sumBankPaidByPaymentMonth /
-        // sumCashPaidByPaymentMonth) so this card can never disagree with those
-        // other screens for the same calendar month again.
         Double collected = paymentRepo.sumPaidAmountByPaymentMonth(currentMonthStr);
         collected = collected == null ? 0.0 : collected;
 
@@ -125,23 +76,6 @@ public class PaymentController {
         cashCollected = cashCollected == null ? 0.0 : cashCollected;
 
         double collPct = activeOwners > 0 ? (paidOwners * 100.0 / activeOwners) : 0.0;
-
-        // ── Task 1: Annual Pending Dues ───────────────────────────────────
-        //
-        // Formula:
-        //   annualPendingDues = totalExpectedYTD − totalCollectedYTD
-        //
-        // completedMonths: January up to (not including) the current month.
-        //   • If month = 1 (January), no month has completed yet → completedMonths = 0.
-        //   • If month = 6 (June), completedMonths = 5 (Jan–May).
-        //
-        // maintAmountPerOwner: from active Maintenance config.
-        //   Uses ratePerSqFt if set (average approach: flat amount × owners is the
-        //   conservative fallback since per-owner sqFt varies; the admin can cross-check
-        //   with Maintenance List for exact per-owner breakdown).
-        //
-        // totalCollectedYTD: sum of all PAID payments from Jan to previousMonth,
-        //   fetched directly from DB via sumCollectedByYearUpToMonth().
 
         Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);
         double maintAmountPerOwner = activeMaint
@@ -195,17 +129,6 @@ public class PaymentController {
         return ResponseEntity.ok(ApiResponse.success(stats));
     }
 
-    /**
-     * GET /admin/payments/transactions
-     *
-     * Admin → Payment Management unified transaction ledger: owner monthly
-     * maintenance payments (PAID) + maintenance batch payments (PAID) +
-     * expense records, combined into one list sorted by transaction date
-     * descending (latest first), with a sequential serialNo. Purely additive
-     * — reads existing data only, does not affect tracking-stats, approve/
-     * reject, Payment Verification, Maintenance Summary, Financial Summary,
-     * or the Dashboard.
-     */
     @GetMapping("/admin/payments/transactions")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<List<TransactionLedgerEntryDTO>>> getTransactionLedger() {
@@ -229,23 +152,6 @@ public class PaymentController {
                 ApiResponse.success("Payment rejected", paymentService.rejectPayment(id, reason)));
     }
 
-    /**
-     * DELETE /admin/payments/{id}
-     *
-     * Super Admin only — removing a payment record is a permanent,
-     * destructive action restricted to the Super Admin role (enforced
-     * server-side in PaymentService.deletePayment via the caller's email
-     * from the JWT — never trust a client-supplied role/flag). Regular
-     * Admins, Owners, Family Members, and Security never see or can call
-     * this action.
-     *
-     * Permanently removes the payment row (and its receipt, if any) from
-     * the database. Every downstream total (Admin Dashboard, Maintenance
-     * Summary, Paid/Unpaid Details, Financial Summary, Payment Management)
-     * reads the `payments` table directly on each request, so the deleted
-     * amount disappears from all of them immediately — no separate
-     * "recalculate" step is needed.
-     */
     @DeleteMapping("/admin/payments/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deletePayment(
@@ -259,10 +165,6 @@ public class PaymentController {
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> submitPayment(
             @RequestBody PaymentRequest req, Authentication auth) {
         Resident r     = residentService.getByEmail(auth.getName());
-        // Route FM -> owner: maintenance belongs to the property (owner row).
-        // Storing under owner.getId() ensures pending-dues, dashboard, and
-        // maintenance-list queries (all keyed on owner resident_id) update
-        // automatically. For OWNER accounts this returns r unchanged.
         Resident owner = residentService.getEffectiveOwnerResident(r);
         PaymentResponseDTO p = paymentService.submitForVerification(owner.getId(), req);
         return ResponseEntity.ok(ApiResponse.success("Payment submitted for admin verification", p));

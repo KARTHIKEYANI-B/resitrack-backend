@@ -45,25 +45,6 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(dashboardService.getUserStats(owner.getId())));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // "My Monthly Maintenance Bill" (Owner Account)
-    // ═══════════════════════════════════════════════════════════════════════
-    //
-    // SINGLE SOURCE OF TRUTH: DashboardService.getUserStats(residentId)
-    //
-    // This endpoint used to recompute the bill amount and payment status
-    // independently (using the flat global Maintenance.amount instead of the
-    // per-resident ratePerSqFt × sqFt formula, and a slightly different status
-    // derivation). That caused this page to show different numbers than the
-    // Dashboard, Maintenance Summary, Payment Management, and Financial Summary.
-    //
-    // Fix: reuse the exact same getUserStats(...) calculation that already
-    // powers the Owner Dashboard (GET /user/dashboard/stats) — which itself
-    // calls MaintenanceService.calculateAmountForResident(...), the same
-    // formula used by the Admin Maintenance List / Maintenance Summary. No
-    // maintenance calculation or payment logic is changed here; this endpoint
-    // simply stops duplicating that logic and reads it from the one place it
-    // is already computed correctly, so all screens stay in sync by construction.
     @GetMapping("/maintenance/current")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentMaintenance(Authentication auth) {
         Resident raw      = residentService.getByEmail(auth.getName());
@@ -73,7 +54,6 @@ public class UserController {
         int month = LocalDate.now().getMonthValue();
         String currentMonthStr = year + "-" + String.format("%02d", month);
 
-        // Same call the Owner Dashboard uses — guarantees identical figures.
         Map<String, Object> stats = dashboardService.getUserStats(resident.getId());
 
         Optional<Maintenance> activeMaint = maintenanceRepo.findFirstByActiveOrderByCreatedAtDesc(true);

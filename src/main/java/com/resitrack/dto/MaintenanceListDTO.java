@@ -20,15 +20,6 @@ public class MaintenanceListDTO {
     private BigDecimal totalFlatMaintenance;
     private BigDecimal totalVillaMaintenance;
     private BigDecimal grandTotal;
-
-    // ── Total PAID amount (collected), as opposed to the billed/due totals
-    //    above. Summed from each owner's paidAmount — which is itself
-    //    sumPaidAmountByPropertyAndPaymentMonth(owner, paymentMonth), the
-    //    same query already used per-row in this DTO's owner lists. This is
-    //    the single authoritative "amount actually collected this month"
-    //    figure: Admin Dashboard's Collected Amount and Admin → Paid/Unpaid
-    //    Details' monthly total must both equal grandTotalPaid for the same
-    //    paymentMonth.
     private BigDecimal totalFlatPaid;
     private BigDecimal totalVillaPaid;
     private BigDecimal grandTotalPaid;

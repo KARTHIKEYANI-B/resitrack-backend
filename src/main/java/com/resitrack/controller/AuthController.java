@@ -49,11 +49,6 @@ public class AuthController {
                 "Registration successful! Pending admin approval.", status));
     }
 
-    // ── Registration with an inline vehicle insurance document upload ─────
-    // Additive endpoint: same fields as /auth/register, sent as multipart
-    // form-data, plus an optional "insuranceDocument" file part. Used by the
-    // registration page only when the owner enters a Vehicle Number and
-    // chooses to upload its insurance document during sign-up.
     @PostMapping(value = "/register", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<RegistrationStatusDTO>> registerWithDocument(
             @org.springframework.web.bind.annotation.RequestPart("data") @Valid RegisterRequest req,

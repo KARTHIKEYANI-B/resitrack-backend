@@ -32,52 +32,52 @@ public class DataInitializer implements CommandLineRunner {
     private final MemberService              memberService;
     private final PasswordEncoder            passwordEncoder;
 
-    private static final String SUPER_ADMIN_EMAIL    = "superadmin@gmail.com";
-    private static final String SUPER_ADMIN_NAME     = "Super Admin";
-    private static final String SUPER_ADMIN_PASSWORD = "Superadmin@123";
+    private static final String SUPER_ADMIN_EMAIL    = "";
+    private static final String SUPER_ADMIN_NAME     = "";
+    private static final String SUPER_ADMIN_PASSWORD = "";
 
 
-    private static final String TEST_SUPER_ADMIN_EMAIL    = "test@gmail.com";
-    private static final String TEST_SUPER_ADMIN_NAME     = "Test Super Admin";
-    private static final String TEST_SUPER_ADMIN_PASSWORD = "Test@123";
-    private static final String TEST_SUPER_ADMIN_PHONE    = "9999999999";
+    private static final String TEST_SUPER_ADMIN_EMAIL    = "";
+    private static final String TEST_SUPER_ADMIN_NAME     = "";
+    private static final String TEST_SUPER_ADMIN_PASSWORD = "";
+    private static final String TEST_SUPER_ADMIN_PHONE    = "";
 
     private static final List<String> SUPER_ADMIN_EMAILS = List.of(
         SUPER_ADMIN_EMAIL,
         TEST_SUPER_ADMIN_EMAIL
     );
 
-    private static final String VICE_PRESIDENT_EMAIL    = "vicepresident@gmail.com";
-    private static final String VICE_PRESIDENT_PASSWORD = "Vicepresident@123";
-    private static final String VICE_PRESIDENT_NAME     = "Vice President";
+    private static final String VICE_PRESIDENT_EMAIL    = "";
+    private static final String VICE_PRESIDENT_PASSWORD = "";
+    private static final String VICE_PRESIDENT_NAME     = "";
 
-    private static final String SECRETARY_EMAIL    = "secretary@gmail.com";
-    private static final String SECRETARY_PASSWORD = "Secratery@123";
-    private static final String SECRETARY_NAME     = "Secretary";
+    private static final String SECRETARY_EMAIL    = "";
+    private static final String SECRETARY_PASSWORD = "";
+    private static final String SECRETARY_NAME     = "";
 
-    private static final String JOINT_SEC_EMAIL    = "joinsecratery@gmail.com";
-    private static final String JOINT_SEC_PASSWORD = "Joinseratery@123";
-    private static final String JOINT_SEC_NAME     = "Joint Secretary";
+    private static final String JOINT_SEC_EMAIL    = "";
+    private static final String JOINT_SEC_PASSWORD = "";
+    private static final String JOINT_SEC_NAME     = "";
 
-    private static final String TREASURER_EMAIL    = "treasurer@gmail.com";
-    private static final String TREASURER_PASSWORD = "Treasurer@123";
-    private static final String TREASURER_NAME     = "Treasurer";
+    private static final String TREASURER_EMAIL    = "";
+    private static final String TREASURER_PASSWORD = "";
+    private static final String TREASURER_NAME     = "";
 
     private static final List<String> LEGACY_EMAILS = List.of(
         "admin.president@apartment.com",
-        "admin.vicepresident@apartment.com",    // VP now migrated to vicepresident@gmail.com
+        "admin.vicepresident@apartment.com",    
         "admin.secretary@apartment.com",
         "admin.jointsecretary@apartment.com",
         "admin.treasurer@apartment.com",
-        "admin@resitrack.com"       // original default admin from first-generation seed
+        "admin@resitrack.com"       
     );
 
     @Override
     public void run(String... args) {
-        purgeLegacyAccounts();           // remove all old apartment.com duplicates first
+        purgeLegacyAccounts();           
         initSuperAdmin();
-        initTestSuperAdmin();            // secondary Super Admin account for demo/QA
-        initDefaultPositionAccounts();   // create all 4 non-president canonical accounts
+        initTestSuperAdmin();            
+        initDefaultPositionAccounts();   
         initMaintenance();
         memberService.seedDefaultPositions();
         log.info("=== ResiTrack Data Initialization Complete ===");
@@ -102,7 +102,6 @@ public class DataInitializer implements CommandLineRunner {
                 continue;
             }
 
-            // Delete all historical assignment rows for this admin (FK constraint)
             List<com.resitrack.entity.AdminAssignment> history =
                     assignmentRepo.findByAdmin(legacy);
             if (!history.isEmpty()) {

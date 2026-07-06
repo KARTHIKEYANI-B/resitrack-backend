@@ -12,15 +12,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Admin → Maintenance → Maintenance Batch
- * ─────────────────────────────────────────────────────────────────────────
- * New, self-contained endpoints for the per-batch payment ledger
- * (BatchPayment), kept entirely separate from MaintenanceController /
- * PaymentController / PaymentVerificationController so none of the
- * existing monthly-maintenance, dashboard, or financial-summary endpoints
- * are touched.
- */
 @RestController
 @RequestMapping("/admin/maintenance/batch-payments")
 @PreAuthorize("hasRole('ADMIN')")
@@ -41,14 +32,6 @@ public class BatchPaymentAdminController {
         return ResponseEntity.ok(ApiResponse.success(batchPaymentService.getAllPaymentsForBatch(batchId)));
     }
 
-    /**
-     * Feeds Admin → Payment Verification: every Maintenance Batch payment
-     * currently PENDING_VERIFICATION, across all batches. Read by the
-     * frontend Payment Verification screen and merged client-side with the
-     * (separate) monthly maintenance verification feed — the two are never
-     * combined on the backend, and this query only ever touches
-     * `batch_payments`.
-     */
     @GetMapping("/pending-verification")
     public ResponseEntity<ApiResponse<List<PaidListEntryDTO>>> getPendingVerification() {
         return ResponseEntity.ok(ApiResponse.success(batchPaymentService.getPendingVerification()));
@@ -70,7 +53,6 @@ public class BatchPaymentAdminController {
         return ResponseEntity.ok(ApiResponse.success("Batch payment rejected", result));
     }
 
-    /** Admin records a payment directly (e.g. cash collected in person). */
     @PutMapping("/{batchPaymentId}/mark-paid")
     public ResponseEntity<ApiResponse<PaidListEntryDTO>> markPaid(
             @PathVariable Long batchPaymentId,

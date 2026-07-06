@@ -13,10 +13,10 @@ public class AdminAssignmentDTO {
         private Long          id;
         private Long          residentId;
         private String        residentName;
-        private String        residentPersonalEmail;  // owner's personal email
+        private String        residentPersonalEmail;  
         private String        flatNumber;
         private Long          adminId;
-        private String        adminPositionEmail;     // e.g. admin.treasurer@apartment.com
+        private String        adminPositionEmail;    
         private String        position;
         private String        positionDisplayName;
         private LocalDate     startDate;

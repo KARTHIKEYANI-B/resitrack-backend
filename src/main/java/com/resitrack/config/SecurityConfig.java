@@ -49,25 +49,19 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            // ── CORS ──────────────────────────────────────────────────────
-            // withDefaults() tells Spring Security to delegate CORS handling
-            // to the CorsFilter bean defined in CorsConfig.java.
-            // Without this line, Spring Security intercepts OPTIONS preflight
-            // requests before CorsFilter runs, returning a 403 with no
-            // CORS headers — which the browser reports as a CORS error even
-            // though the real issue is Spring Security blocking the request.
+            
             .cors(withDefaults())
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // Public auth endpoints
+                
                 .requestMatchers(
-                    "/auth/login",                          // NEW unified login
-                    "/auth/admin/login",                    // kept for compat
-                    "/auth/user/login",                     // kept for compat
-                    "/auth/security/login",                 // kept for compat
+                    "/auth/login",                          
+                    "/auth/admin/login",                    
+                    "/auth/user/login",                     
+                    "/auth/security/login",                
                     "/auth/register",
                     "/auth/validate-register-number/**",
                     "/auth/registration-status/**"
@@ -80,13 +74,12 @@ public class SecurityConfig {
 
                 .requestMatchers("/uploads/**").permitAll()
 
-                // Member endpoints (unchanged)
+                
                 .requestMatchers(HttpMethod.GET, "/members", "/members/**").authenticated()
                 .requestMatchers(HttpMethod.POST,   "/members", "/members/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT,    "/members/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/members/**").hasRole("ADMIN")
 
-                // Role-specific dashboard endpoints (unchanged)
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .requestMatchers("/user/**").hasRole("USER")
                 .requestMatchers("/security/**").hasRole("SECURITY")

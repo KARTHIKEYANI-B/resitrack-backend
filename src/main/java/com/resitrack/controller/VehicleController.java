@@ -16,12 +16,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
-/**
- * Owner-facing endpoints for managing multiple vehicles and their
- * insurance documents. Mounted under /user/vehicles, protected by the
- * existing ROLE_USER security matcher ("/user/**") — no SecurityConfig
- * changes are required.
- */
 @RestController
 @RequestMapping("/user/vehicles")
 @PreAuthorize("hasRole('USER')")
@@ -44,7 +38,6 @@ public class VehicleController {
         return ResponseEntity.ok(ApiResponse.success(vehicleService.getById(id, owner.getId())));
     }
 
-    // ── Add vehicle — JSON only (no insurance document) ───────────────────
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ApiResponse<VehicleDTO.Response>> addVehicle(
             @RequestBody VehicleDTO.Request req, Authentication auth) {
@@ -54,7 +47,6 @@ public class VehicleController {
                 .body(ApiResponse.success("Vehicle added successfully", created));
     }
 
-    // ── Add vehicle — multipart, with optional insurance document ─────────
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<VehicleDTO.Response>> addVehicleWithDocument(
             @RequestParam("vehicleNumber") String vehicleNumber,

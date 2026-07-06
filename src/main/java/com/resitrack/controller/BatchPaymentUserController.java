@@ -14,20 +14,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-/**
- * Owner / Family Member → "Maintenance Batch Dues"
- * ─────────────────────────────────────────────────────────────────────────
- * Requirement 3/4: a dedicated section (separate from the regular monthly
- * "Maintenance" page) showing Batch Name, Amount, and Status, with the
- * ability for either the Owner or any Family Member of that property to
- * pay it.
- *
- * Mirrors the same auth/resolution pattern already used everywhere else in
- * this app (ResidentService.getByEmail + getEffectiveOwnerResident), so an
- * Owner and their Family Members see and act on the exact same dues list
- * for their shared property — consistent with how Pending Dues, Dashboard,
- * and Financial Summary already work.
- */
 @RestController
 @RequestMapping("/user/maintenance-batch-dues")
 @PreAuthorize("hasRole('USER')")

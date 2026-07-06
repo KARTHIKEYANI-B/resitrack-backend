@@ -31,12 +31,6 @@ public class PaymentVerificationController {
     private final ResidentService            residentService;
     private final AdminRepository            adminRepo;
 
-    // ── User: get active admins for CASH payment selection ───────────────
-
-    /**
-     * Returns all active admin accounts for the "Paid To" dropdown in CASH payments.
-     * Accessible by USER role so owners/family members can select the admin.
-     */
     @GetMapping("/user/payment-verification/active-admins")
     @PreAuthorize("hasRole('USER')")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getActiveAdmins() {
@@ -176,9 +170,4 @@ public class PaymentVerificationController {
                 "Payment request rejected", verificationService.rejectRequest(id, reason)));
     }
 
-    // Screenshot retrieval no longer needs a backend proxy endpoint: every
-    // PaymentVerificationRequestDTO already carries `screenshotUrl`, which is
-    // Cloudinary's permanent secure_url. The admin frontend renders that URL
-    // directly (<img src={request.screenshotUrl}>), so there is nothing left
-    // for the backend to stream from disk.
 }

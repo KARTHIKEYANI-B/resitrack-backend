@@ -22,14 +22,17 @@ public class CorsConfig {
         config.setAllowCredentials(true);
 
         List<String> origins = new ArrayList<>(List.of(
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "http://localhost:4173",
-            // Production Vercel deployments
-            "https://resitrack-karthikeyani-bs-projects.vercel.app",
-            "https://resitrack-seven.vercel.app",
-            "https://resitrack-git-main-karthikeyani-bs-projects.vercel.app"
-        ));
+    "http://localhost",
+    "capacitor://localhost",
+
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:4173",
+
+    "https://resitrack-karthikeyani-bs-projects.vercel.app",
+    "https://resitrack-seven.vercel.app",
+    "https://resitrack-git-main-karthikeyani-bs-projects.vercel.app"
+));
 
         
         if (allowedOriginsConfig != null && !allowedOriginsConfig.isBlank()) {

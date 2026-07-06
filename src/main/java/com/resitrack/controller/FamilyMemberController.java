@@ -92,7 +92,6 @@ public class FamilyMemberController {
 
     private Resident getOwner(Authentication auth) {
         Resident r = residentService.getByEmail(auth.getName());
-        // Only OWNER accounts can manage family members
         if (r.getResidentRole() != Resident.ResidentRole.OWNER) {
             throw new com.resitrack.exception.CustomException(
                     "Only property owners can manage family members",

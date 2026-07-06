@@ -21,21 +21,6 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
-/**
- * Pending-dues endpoints — Admin and User.
- *
- * SOURCE OF TRUTH: Maintenance List (per-owner iteration using findAllActiveNonDeleted).
- *
- * PROPERTY-LEVEL PAYMENT AGGREGATION (root-cause fix):
- *  All paid-sum lookups use sumPaidAmountByPropertyAndPaymentMonth(owner.id, month)
- *  which aggregates PAID payments for the owner AND every Family Member whose
- *  ownerResidentId = owner.id.  This ensures FM payments are always counted.
- *
- * STATUS RULES (same as Maintenance List):
- *  pendingAmount == 0                            → PAID → excluded from Pending Dues
- *  paidSoFar > 0 AND paidSoFar < ownerMaintAmount → UNPAID (PARTIAL removed)
- *  paidSoFar == 0                                 → PENDING (UNPAID)
- */
 @RestController
 @RequiredArgsConstructor
 public class PendingDuesController {
@@ -67,34 +52,25 @@ public class PendingDuesController {
         List<Map<String, Object>> result = new ArrayList<>();
 
         for (Resident r : activeOwners) {
-            // Per-owner maintenance amount — same formula as Maintenance List
             BigDecimal calcAmountBD = activeMaint
                     .map(m -> maintenanceService.calculateAmountForResident(m, r.getSqFt()))
                     .orElse(BigDecimal.ZERO);
             double ownerMaintAmount = calcAmountBD.doubleValue();
 
-            // PROPERTY-LEVEL paid sum: owner + all linked FM accounts
             Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(
                     r.getId(), currentMonth);
             double paidSoFar = paidRaw == null ? 0.0 : paidRaw;
 
-            // pendingAmount — authoritative value, same formula as Maintenance List
             double pendingAmount = BigDecimal.valueOf(ownerMaintAmount)
                     .subtract(BigDecimal.valueOf(paidSoFar))
                     .max(BigDecimal.ZERO)
                     .setScale(2, RoundingMode.HALF_UP)
                     .doubleValue();
 
-            // pendingAmount == 0 → PAID → remove completely from Pending Dues
-            // Use a small tolerance (< 0.005 = less than half a paisa) to
-            // avoid floating-point imprecision causing a paid owner to appear here.
             if (pendingAmount < 0.005) continue;
 
-            // Two-state model: any owner with pendingAmount > 0 is UNPAID (PENDING).
-            // PARTIAL is no longer a valid status.
             String status = "PENDING";
 
-            // Late fee: only if past due date and no payment at all
             double lateFee = 0.0;
             if (defaultLateFee > 0 && defaultDueDate != null
                     && LocalDate.now().isAfter(defaultDueDate)
@@ -102,7 +78,6 @@ public class PendingDuesController {
                 lateFee = defaultLateFee;
             }
 
-            // Look up an existing PENDING/OVERDUE payment record id for penalty/notify actions
             Long paymentId = paymentRepo.findByResidentIdAndPaymentMonth(r.getId(), currentMonth)
                     .stream()
                     .filter(p -> p.getPaymentStatus() == Payment.PaymentStatus.PENDING
