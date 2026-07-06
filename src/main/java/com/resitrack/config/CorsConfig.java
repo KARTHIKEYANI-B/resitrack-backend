@@ -21,8 +21,9 @@ public class CorsConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
 
-        List<String> origins = new ArrayList<>(List.of(
+List<String> origins = new ArrayList<>(List.of(
     "http://localhost",
+    "https://localhost",
     "capacitor://localhost",
 
     "http://localhost:3000",
