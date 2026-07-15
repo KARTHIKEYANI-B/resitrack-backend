@@ -289,8 +289,16 @@ public class MaintenanceService {
         BigDecimal villaRatePerSqFt = activeVillaMaint.map(Maintenance::getRatePerSqFt).orElse(null);
         BigDecimal flatAmount  = activeFlatMaint.map(Maintenance::getAmount).orElse(BigDecimal.ZERO);
 
-        List<Resident> flatOwners  = residentRepo.findActiveNonDeletedByPropertyType(PropertyType.FLAT);
-        List<Resident> villaOwners = residentRepo.findActiveNonDeletedByPropertyType(PropertyType.VILLA);
+        // ── FIX: flatNumber is a String column, so the repository's
+        // "ORDER BY r.flatNumber ASC" sorts lexicographically (e.g. "10"
+        // before "2"), not numerically. Re-sort here with a natural-order
+        // comparator so owners appear in true flat/villa number order.
+        List<Resident> flatOwners  = residentRepo.findActiveNonDeletedByPropertyType(PropertyType.FLAT)
+                .stream().sorted(Comparator.comparing(Resident::getFlatNumber, MaintenanceService::naturalCompare))
+                .collect(Collectors.toList());
+        List<Resident> villaOwners = residentRepo.findActiveNonDeletedByPropertyType(PropertyType.VILLA)
+                .stream().sorted(Comparator.comparing(Resident::getFlatNumber, MaintenanceService::naturalCompare))
+                .collect(Collectors.toList());
 
         List<MaintenanceOwnerDTO> flatDTOs  = buildOwnerDTOs(flatOwners,  activeFlatMaint.orElse(null),  paymentMonth);
         List<MaintenanceOwnerDTO> villaDTOs = buildOwnerDTOs(villaOwners, activeVillaMaint.orElse(null), paymentMonth);
@@ -429,6 +437,36 @@ public class MaintenanceService {
                     .paymentMonth(paymentMonth)
                     .build();
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * Natural-order string comparator: compares digit runs numerically and
+     * non-digit runs case-insensitively, chunk by chunk. Lets "A-2" sort
+     * before "A-10" and "9" sort before "10", matching how a person reads
+     * flat/villa numbers rather than plain lexicographic order.
+     */
+    private static int naturalCompare(String a, String b) {
+        if (a == null) a = "";
+        if (b == null) b = "";
+        int i = 0, j = 0;
+        while (i < a.length() && j < b.length()) {
+            char ca = a.charAt(i), cb = b.charAt(j);
+            if (Character.isDigit(ca) && Character.isDigit(cb)) {
+                int si = i, sj = j;
+                while (i < a.length() && Character.isDigit(a.charAt(i))) i++;
+                while (j < b.length() && Character.isDigit(b.charAt(j))) j++;
+                String na = a.substring(si, i).replaceFirst("^0+(?=\\d)", "");
+                String nb = b.substring(sj, j).replaceFirst("^0+(?=\\d)", "");
+                if (na.length() != nb.length()) return na.length() - nb.length();
+                int cmp = na.compareTo(nb);
+                if (cmp != 0) return cmp;
+            } else {
+                int cmp = Character.compare(Character.toLowerCase(ca), Character.toLowerCase(cb));
+                if (cmp != 0) return cmp;
+                i++; j++;
+            }
+        }
+        return (a.length() - i) - (b.length() - j);
     }
 
     // ── Batch management ──────────────────────────────────────────────────

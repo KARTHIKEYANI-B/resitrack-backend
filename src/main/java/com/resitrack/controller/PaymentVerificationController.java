@@ -37,8 +37,6 @@ public class PaymentVerificationController {
         List<Map<String, Object>> admins = adminRepo.findAll()
                 .stream()
                 .filter(a -> a.getResidentId() != null || a.isSuperAdmin())
-                // Show admins who are assigned (have a residentId) or are super admin
-                // This includes all position-based admins currently active
                 .map(a -> {
                     String displayName = a.getName();
                     String position = a.getPosition() != null
@@ -52,8 +50,6 @@ public class PaymentVerificationController {
                 .collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(admins));
     }
-
-    // ── User: GPAY — existing submit (unchanged) ──────────────────────────
 
     @PostMapping(value = "/user/payment-verification/submit",
                  consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -74,8 +70,6 @@ public class PaymentVerificationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Payment verification request submitted successfully", result));
     }
-
-    // ── User: CASH — new submit ───────────────────────────────────────────
 
     @PostMapping(value = "/user/payment-verification/submit-cash",
                  consumes = MediaType.APPLICATION_JSON_VALUE)
