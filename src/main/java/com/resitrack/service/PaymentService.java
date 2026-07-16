@@ -46,26 +46,6 @@ public class PaymentService {
         return payments.stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
     }
 
-    /**
-     * Task 2 — re-validate remaining balance at APPROVE time.
-     *
-     * Mirrors the same fix in PaymentVerificationService.verifyRequest():
-     * validateRemainingBalance() (called once in submitForVerification(),
-     * below) only checks against payments that are ALREADY PAID at
-     * submission time — a still-PENDING_VERIFICATION row never reduces what
-     * a later submission is allowed to ask for. Two PENDING_VERIFICATION
-     * rows for the same resident + month can therefore each individually
-     * pass that submission-time check and then both be approved here,
-     * producing two PAID rows that together exceed the required maintenance
-     * amount.
-     *
-     * Re-checking immediately before flipping a row to PAID closes that
-     * gap: once one PENDING_VERIFICATION row for a month has been approved,
-     * approving a second one for the same resident + month is now rejected
-     * here, surfacing as a clear error to the admin instead of silently
-     * creating a duplicate-paid month. The admin can still reject the
-     * duplicate row via the existing rejectPayment() flow.
-     */
     @Transactional
     public PaymentResponseDTO approvePayment(Long paymentId) {
         Payment p = paymentRepo.findById(paymentId)
@@ -159,30 +139,6 @@ public class PaymentService {
                 .stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
     }
 
-    /**
-     * Admin → Payment Management unified transaction ledger.
-     *
-     * Combines three EXISTING, read-only data sources into one date-sorted
-     * list — it creates no new financial records and changes nothing about
-     * how income or expenses are calculated elsewhere:
-     *
-     *   INCOME  — every owner monthly maintenance Payment with
-     *             paymentStatus = PAID (paymentDate is the transaction date)
-     *   INCOME  — every BatchPayment with status = PAID
-     *             (verifiedDate, falling back to submittedDate, as the
-     *             transaction date — a batch payment only reaches PAID once
-     *             an admin verifies it, exactly like the regular flow)
-     *   EXPENSE — every Expense record (expenseDate as the transaction date)
-     *
-     * "Other income records" has no concrete source in this codebase — there
-     * is no separate Income entity — so only the two PAID-payment sources
-     * above are included; nothing is hardcoded or invented.
-     *
-     * Sorted by date descending (latest first) as required; serialNo is
-     * assigned 1..N after sorting. This method does not touch, call, or
-     * duplicate any Financial Summary / Dashboard / Maintenance Summary /
-     * Payment Verification logic — it only reads already-persisted rows.
-     */
     @Transactional
     public List<TransactionLedgerEntryDTO> getTransactionLedger() {
         List<TransactionLedgerEntryDTO> entries = new ArrayList<>();
@@ -263,48 +219,6 @@ public class PaymentService {
         return entries;
     }
 
-    /**
-     * Admin Manual Payment Registration — POST /admin/payments
-     *
-     * Lets an Admin/Super Admin record a monthly maintenance payment on
-     * behalf of an owner (e.g. cash collected in person, a bank transfer
-     * confirmed outside the app) without that owner ever submitting it
-     * themselves.
-     *
-     * RESIDENT LOOKUP: by phone (unique column) — the frontend collects
-     * ownerName for display/confirmation only; phone is the actual key,
-     * so a typo'd name never blocks a legitimate payment for the right
-     * person while still catching a wrong/unregistered number.
-     *
-     * VERIFICATION:
-     *   verifiedByAdmin = true  → paymentStatus=PAID, verificationStatus=VERIFIED,
-     *                             receipt generated immediately (same as approvePayment()).
-     *   verifiedByAdmin = false → paymentStatus=PENDING_VERIFICATION,
-     *                             verificationStatus=PENDING, awaits the normal
-     *                             approve/reject flow — unchanged from today.
-     *
-     * PARTIAL PAYMENTS: multiple payments are allowed for the same resident +
-     * paymentMonth (installments). What used to be an all-or-nothing block —
-     * any existing PAID row for the month rejected every further attempt,
-     * even a legitimate remaining-balance payment — is now a remaining-
-     * balance check:
-     *
-     *   requiredAmount  = MaintenanceService.getRequiredMaintenanceAmountFor(resident)
-     *   totalPaidAmount = sum of all VERIFIED (PAID) payments this month
-     *                     (sumPaidAmountByPropertyAndPaymentMonth — same sum
-     *                     Maintenance Summary / Financial Summary / Dashboard use)
-     *   remainingAmount = requiredAmount − totalPaidAmount
-     *
-     * Rejected only when remainingAmount <= 0 ("already fully paid") or when
-     * this entry's amount would exceed the remaining balance. Does not touch
-     * Maintenance Batch payments (separate batch_payments table/flow).
-     *
-     * adminCreated = true distinguishes this row from owner-submitted
-     * payments everywhere downstream (Maintenance Summary, Financial Summary,
-     * Dashboard, Payment Management all read straight from the payments table
-     * on each request, so no extra "refresh" wiring is needed once the row
-     * exists with the correct status/date/month).
-     */
     @Transactional
     public PaymentResponseDTO registerAdminPayment(AdminPaymentRequest req) {
         if (req.getOwnerPhone() == null || req.getOwnerPhone().isBlank())
@@ -335,9 +249,6 @@ public class PaymentService {
             resident = residentRepo.findById(resident.getOwnerResidentId()).orElse(resident);
         }
 
-        // Allow installment payments: only reject once the required amount
-        // has already been fully covered by VERIFIED (PAID) payments, or if
-        // this entry alone would push the total beyond what's required.
         validateRemainingBalance(resident, req.getPaymentMonth(), req.getPaidAmount());
 
         boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
@@ -348,10 +259,6 @@ public class PaymentService {
 
         String year = String.valueOf(req.getPaymentMonth().split("-")[0]);
 
-        // Best-effort link to the currently active Maintenance config for this
-        // resident's property type, purely for traceability/reporting — the
-        // admin-entered paidAmount is always the amount actually recorded,
-        // never recalculated or overridden from this row.
         Maintenance maint = getActiveMaintenanceConfigForResident(resident);
 
         Payment p = Payment.builder()
@@ -397,25 +304,6 @@ public class PaymentService {
                 .orElse(null);
     }
 
-    /**
-     * Allow Partial Maintenance Payments — same gate as
-     * PaymentVerificationService.validateRemainingBalance, parameterized by
-     * paymentMonth since an admin can record a payment against any billing
-     * month (not just the current one, unlike the owner self-service flow).
-     *
-     *   requiredAmount  = MaintenanceService.getRequiredMaintenanceAmountFor(resident)
-     *   totalPaidAmount = sum of all VERIFIED (PAID) payments for this
-     *                     resident's property + paymentMonth
-     *                     (sumPaidAmountByPropertyAndPaymentMonth — the exact
-     *                     same sum Maintenance Summary / Financial Summary /
-     *                     the Owner Dashboard already use)
-     *   remainingAmount = requiredAmount − totalPaidAmount
-     *
-     * Rejects when remainingAmount <= 0 (nothing left to pay) or when this
-     * entry's amount would push the total beyond what's required — while
-     * still allowing any number of partial installments up to the exact
-     * remaining balance.
-     */
     private void validateRemainingBalance(Resident resident, String paymentMonth, BigDecimal requestedAmount) {
         BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
         if (required.compareTo(BigDecimal.ZERO) <= 0) return; // nothing configured — nothing to gate
@@ -437,19 +325,6 @@ public class PaymentService {
         }
     }
 
-    /**
-     * Task 2 — remaining-balance re-check at APPROVE time. See the call site
-     * in approvePayment() above for the full duplicate-approval scenario
-     * this guards against; mirrors
-     * PaymentVerificationService.validateRemainingBalanceAtVerification()
-     * for the screenshot-based flow.
-     *
-     * sumPaidAmountByPropertyAndPaymentMonth only counts rows already at
-     * paymentStatus = PAID, and the row being approved is still
-     * PENDING_VERIFICATION at the moment this runs (the status flip happens
-     * after this check passes), so it is automatically excluded from
-     * totalPaid here — no separate "exclude this row" logic is needed.
-     */
     private void validateRemainingBalanceAtApproval(
             Resident resident, String paymentMonth, BigDecimal requestedAmount) {
         BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);

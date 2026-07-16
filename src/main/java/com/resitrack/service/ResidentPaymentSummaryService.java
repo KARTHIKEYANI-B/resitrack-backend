@@ -4,6 +4,7 @@ import com.resitrack.entity.Payment;
 import com.resitrack.entity.Resident;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.util.NaturalOrderComparator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -98,8 +99,14 @@ public class ResidentPaymentSummaryService {
         // Only approved + active OWNER residents — no pending, rejected,
         // deleted, or family-member logins (family members pay against the
         // owner's property, already captured in these PAID records).
+        // Natural-order sort — villa numbers (1-41) are numerically below
+        // flat numbers (42-104), so ascending flat/villa-number order
+        // naturally groups villas first, then flats. A plain String sort
+        // would instead go lexicographic ("10" before "2"), scattering rows.
         List<Resident> residents = residentRepo.findAllActiveApprovedOwners().stream()
-                .sorted(Comparator.comparing(r -> r.getFlatNumber() != null ? r.getFlatNumber() : ""))
+                .sorted(Comparator.comparing(
+                        r -> r.getFlatNumber() != null ? r.getFlatNumber() : "",
+                        NaturalOrderComparator.INSTANCE))
                 .collect(Collectors.toList());
 
         // ── Build the 12 FY month columns first: Apr..Dec (fyStartYear), Jan..Mar (fyStartYear+1) ──
