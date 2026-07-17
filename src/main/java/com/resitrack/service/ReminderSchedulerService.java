@@ -2,8 +2,10 @@ package com.resitrack.service;
 
 import com.resitrack.entity.Notification;
 import com.resitrack.entity.Resident;
+import com.resitrack.entity.TaxCategory;
 import com.resitrack.repository.NotificationRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.repository.TaxCategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,10 +21,12 @@ public class ReminderSchedulerService {
 
     private final ResidentRepository    residentRepo;
     private final NotificationRepository notifRepo;
+    private final TaxCategoryRepository  taxCategoryRepo;
 
     @Scheduled(cron = "0 0 8 * * *")
     public void checkAndSendReminders() {
-        LocalDate targetDate = LocalDate.now().plusDays(2);
+        LocalDate today      = LocalDate.now();
+        LocalDate targetDate = today.plusDays(2);
         log.info("ReminderScheduler: checking reminders for target date {}", targetDate);
 
         List<Resident> allOwners = residentRepo.findAllActiveApprovedOwners();
@@ -32,6 +36,7 @@ public class ReminderSchedulerService {
             if (r.isTaxesReminderEnabled()) {
                 sendTaxesRemindersIfDue(r, targetDate);
             }
+            sendCustomTaxCategoryRemindersIfDue(r, today, targetDate);
         }
     }
 
@@ -115,5 +120,50 @@ public class ReminderSchedulerService {
                 .build());
 
         log.info("Sent {} reminder to resident {} (flat {})", taxName, r.getFullName(), r.getFlatNumber());
+    }
+
+    // ── Custom Tax Categories (owner-defined, dynamic — separate from the
+    // 4 legacy fixed tax fields above, which remain untouched) ─────────────
+    private void sendCustomTaxCategoryRemindersIfDue(Resident r, LocalDate today, LocalDate targetDate) {
+        List<TaxCategory> categories = taxCategoryRepo.findByResidentIdAndActiveTrueOrderByDueDateAsc(r.getId());
+
+        for (TaxCategory t : categories) {
+            // Fire on the owner-chosen reminder date if set; otherwise fall
+            // back to the same "2 days before due date" convention used by
+            // the legacy tax/insurance reminders above.
+            boolean isDue = t.getReminderDate() != null
+                    ? today.equals(t.getReminderDate())
+                    : targetDate.equals(t.getDueDate());
+            if (!isDue) continue;
+
+            boolean alreadySent = notifRepo.existsByTargetResidentIdAndTypeAndTitleContainingAndCreatedAtDate(
+                    r.getId(),
+                    Notification.NotificationType.TAXES_REMINDER,
+                    t.getTaxName(),
+                    today);
+            if (alreadySent) continue;
+
+            String typeInfo = t.getTaxType() != null && !t.getTaxType().isBlank()
+                    ? " (" + t.getTaxType() + ")" : "";
+            String descInfo = t.getDescription() != null && !t.getDescription().isBlank()
+                    ? " — " + t.getDescription() : "";
+
+            notifRepo.save(Notification.builder()
+                    .title(t.getTaxName() + " Due Reminder")
+                    .message("Dear " + r.getFullName()
+                            + ", your " + t.getTaxName() + typeInfo
+                            + " payment is due on " + t.getDueDate() + descInfo
+                            + ". Please ensure timely payment to avoid penalties.")
+                    .type(Notification.NotificationType.TAXES_REMINDER)
+                    .targetResidentId(r.getId())
+                    .residentName(r.getFullName())
+                    .flatNumber(r.getFlatNumber())
+                    .recipientRole("USER")
+                    .isRead(false)
+                    .build());
+
+            log.info("Sent custom tax category reminder '{}' to resident {} (flat {})",
+                    t.getTaxName(), r.getFullName(), r.getFlatNumber());
+        }
     }
 }

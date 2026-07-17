@@ -1,6 +1,7 @@
 package com.resitrack.controller;
 
 import com.resitrack.dto.ApiResponse;
+import com.resitrack.dto.FinancialYearMonthDTO;
 import com.resitrack.dto.PaymentVerificationRequestDTO;
 import com.resitrack.entity.Admin;
 import com.resitrack.entity.Resident;
@@ -113,6 +114,82 @@ public class PaymentVerificationController {
                 owner.getId(), r.getId(), name, phoneNumber, paymentAmount, referenceId, bankName, screenshot);
         return ResponseEntity.ok(ApiResponse.success(
                 "Bank transfer details submitted. Admin will verify shortly.", result));
+    }
+
+    // ── Multi-Month Maintenance Payment ────────────────────────────────────
+
+    /** Financial-Year month selector: status + payable amount for every FY month up to this one. */
+    @GetMapping("/user/payment-verification/financial-year-months")
+    @PreAuthorize("hasRole('USER')")
+    public ResponseEntity<ApiResponse<List<FinancialYearMonthDTO>>> getFinancialYearMonths(
+            Authentication auth) {
+        Resident r     = residentService.getByEmail(auth.getName());
+        Resident owner = residentService.getEffectiveOwnerResident(r);
+        return ResponseEntity.ok(ApiResponse.success(
+                verificationService.getFinancialYearMonths(owner.getId())));
+    }
+
+    @PostMapping(value = "/user/payment-verification/submit-multi",
+                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('USER')")
+    public ResponseEntity<ApiResponse<PaymentVerificationRequestDTO>> submitMultiMonthRequest(
+            @RequestParam("name")           String name,
+            @RequestParam("phoneNumber")    String phoneNumber,
+            @RequestParam("months")         List<String> months,
+            @RequestParam("transactionId")  String transactionId,
+            @RequestParam(value = "screenshot", required = false) MultipartFile screenshot,
+            Authentication auth) throws IOException {
+
+        Resident r     = residentService.getByEmail(auth.getName());
+        Resident owner = residentService.getEffectiveOwnerResident(r);
+
+        PaymentVerificationRequestDTO result = verificationService.submitMultiMonthRequest(
+                owner.getId(), r.getId(), name, phoneNumber, months, transactionId, screenshot);
+        return ResponseEntity.ok(ApiResponse.success(
+                "Multi-month payment submitted for admin verification", result));
+    }
+
+    @PostMapping(value = "/user/payment-verification/submit-multi-cash",
+                 consumes = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("hasRole('USER')")
+    public ResponseEntity<ApiResponse<PaymentVerificationRequestDTO>> submitMultiMonthCashRequest(
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+
+        Resident r     = residentService.getByEmail(auth.getName());
+        Resident owner = residentService.getEffectiveOwnerResident(r);
+
+        String       name        = (String) body.get("name");
+        String       phoneNumber = (String) body.get("phoneNumber");
+        Long         adminId     = Long.valueOf(body.get("paidToAdminId").toString());
+        @SuppressWarnings("unchecked")
+        List<String> months      = (List<String>) body.get("months");
+
+        PaymentVerificationRequestDTO result = verificationService.submitMultiMonthCashRequest(
+                owner.getId(), r.getId(), name, phoneNumber, months, adminId);
+        return ResponseEntity.ok(ApiResponse.success(
+                "Multi-month cash payment request submitted. Admin will verify shortly.", result));
+    }
+
+    @PostMapping(value = "/user/payment-verification/submit-multi-bank-transfer",
+                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('USER')")
+    public ResponseEntity<ApiResponse<PaymentVerificationRequestDTO>> submitMultiMonthBankTransferRequest(
+            @RequestParam("name")                          String name,
+            @RequestParam("phoneNumber")                   String phoneNumber,
+            @RequestParam("months")                        List<String> months,
+            @RequestParam("referenceId")                   String referenceId,
+            @RequestParam(value = "bankName",  required = false) String bankName,
+            @RequestParam(value = "screenshot", required = false) MultipartFile screenshot,
+            Authentication auth) throws IOException {
+
+        Resident r     = residentService.getByEmail(auth.getName());
+        Resident owner = residentService.getEffectiveOwnerResident(r);
+
+        PaymentVerificationRequestDTO result = verificationService.submitMultiMonthBankTransferRequest(
+                owner.getId(), r.getId(), name, phoneNumber, months, referenceId, bankName, screenshot);
+        return ResponseEntity.ok(ApiResponse.success(
+                "Multi-month bank transfer details submitted. Admin will verify shortly.", result));
     }
 
     // ── User: list own requests ───────────────────────────────────────────

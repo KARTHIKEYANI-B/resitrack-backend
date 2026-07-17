@@ -7,6 +7,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "payment_verification_requests")
@@ -77,6 +79,22 @@ public class PaymentVerificationRequest {
 
     @Column(name = "payment_id")
     private Long paymentId;
+
+    // ── Multi-Month Maintenance Payment ─────────────────────────────────
+    // When true, this request covers 2+ billing months in one submission
+    // and monthAllocations holds the per-month breakdown (see
+    // PaymentVerificationRequestMonth). When false/null (every request
+    // created by the ORIGINAL single-month submit/submit-cash/
+    // submit-bank-transfer flows), monthAllocations stays empty and this
+    // request behaves EXACTLY as before — paymentMonth/paymentAmount above
+    // are the sole source of truth, unchanged.
+    @Builder.Default
+    @Column(name = "is_multi_month", nullable = false)
+    private Boolean isMultiMonth = false;
+
+    @Builder.Default
+    @OneToMany(mappedBy = "request", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<PaymentVerificationRequestMonth> monthAllocations = new ArrayList<>();
 
     @CreationTimestamp
     private LocalDateTime createdAt;

@@ -6,6 +6,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -30,6 +31,13 @@ public class PaymentVerificationRequestDTO {
     private String     bankName;        // for BANK_TRANSFER (optional)
     private String     submittedByLabel;
     private String     ownerName;
+
+    // ── Multi-Month Maintenance Payment (additive; empty/false for every
+    //    request created by the original single-month submit flows) ──────
+    private boolean               multiMonth;
+    private String                monthsDisplayLabel; // e.g. "May 2026 + Jun 2026"
+    private List<MonthAllocationDTO> monthAllocations;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -53,6 +61,7 @@ public class PaymentVerificationRequestDTO {
                 .paidToAdminId(r.getPaidToAdminId())
                 .paidToAdminName(r.getPaidToAdminName())
                 .bankName(r.getBankName())
+                .multiMonth(Boolean.TRUE.equals(r.getIsMultiMonth()))
                 .createdAt(r.getCreatedAt())
                 .updatedAt(r.getUpdatedAt())
                 .build();

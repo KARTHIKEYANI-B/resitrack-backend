@@ -1,5 +1,7 @@
 package com.resitrack.service;
 
+import com.resitrack.dto.FinancialYearMonthDTO;
+import com.resitrack.dto.MonthAllocationDTO;
 import com.resitrack.dto.PaymentVerificationRequestDTO;
 import com.resitrack.entity.*;
 import com.resitrack.exception.CustomException;
@@ -200,6 +202,331 @@ public class PaymentVerificationService {
         return toDTO(saved);
     }
 
+    // ── Multi-Month Maintenance Payment ─────────────────────────────────
+
+    private static final int FY_START_MONTH = 4; // April
+    private static final int FY_END_MONTH   = 3; // March
+    private static final String[] MONTH_NAMES = {
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
+    };
+
+    private String monthLabelFor(String yyyyMM) {
+        if (yyyyMM == null || !yyyyMM.matches("\\d{4}-\\d{2}")) return yyyyMM;
+        String[] parts = yyyyMM.split("-");
+        int yr = Integer.parseInt(parts[0]);
+        int mo = Integer.parseInt(parts[1]);
+        return MONTH_NAMES[mo - 1] + " " + yr;
+    }
+
+    /**
+     * The Financial-Year (Apr → Mar) month selector shown when an Owner /
+     * Family Member opens "Pay Maintenance". Only months up to and
+     * including the current calendar month are returned — a resident can
+     * settle THIS month and any earlier pending months in the active FY,
+     * never a future month that hasn't billed yet.
+     */
+    @Transactional(readOnly = true)
+    public List<FinancialYearMonthDTO> getFinancialYearMonths(Long residentId) {
+        Resident resident = resolveOwner(residentId);
+
+        LocalDate now = LocalDate.now();
+        int fyStartYear = now.getMonthValue() >= FY_START_MONTH ? now.getYear() : now.getYear() - 1;
+        String currentMonthKey = currentMonthStr();
+
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+
+        List<String> monthKeys = new ArrayList<>();
+        for (int m = FY_START_MONTH; m <= 12; m++) {
+            monthKeys.add(fyStartYear + "-" + String.format("%02d", m));
+        }
+        for (int m = 1; m <= FY_END_MONTH; m++) {
+            monthKeys.add((fyStartYear + 1) + "-" + String.format("%02d", m));
+        }
+
+        Set<String> lockedMonths = pendingMonthsForResident(resident.getId());
+
+        List<FinancialYearMonthDTO> result = new ArrayList<>();
+        for (String key : monthKeys) {
+            boolean isFuture = key.compareTo(currentMonthKey) > 0;
+
+            Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), key);
+            BigDecimal paidSoFar = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+            BigDecimal remaining = required.subtract(paidSoFar).max(BigDecimal.ZERO);
+
+            String status;
+            boolean selectable;
+
+            if (isFuture) {
+                status = "NOT_DUE";
+                selectable = false;
+            } else if (required.compareTo(BigDecimal.ZERO) <= 0 || remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                status = "PAID";
+                selectable = false;
+            } else if (lockedMonths.contains(key)) {
+                status = "PENDING_VERIFICATION";
+                selectable = false;
+            } else if (paidSoFar.compareTo(BigDecimal.ZERO) > 0) {
+                status = "PARTIALLY_PAID";
+                selectable = true;
+            } else {
+                status = "UNPAID";
+                selectable = true;
+            }
+
+            result.add(FinancialYearMonthDTO.builder()
+                    .month(key)
+                    .monthLabel(monthLabelFor(key))
+                    .dueAmount(required)
+                    .paidSoFar(paidSoFar)
+                    .remainingDue(remaining)
+                    .status(status)
+                    .selectable(selectable)
+                    .build());
+        }
+        return result;
+    }
+
+    /** Every billing month already covered by a still-PENDING request (single- or multi-month). */
+    private Set<String> pendingMonthsForResident(Long residentId) {
+        Set<String> months = new HashSet<>();
+        for (PaymentVerificationRequest r :
+                verificationRepo.findByResidentIdAndStatus(residentId, PaymentVerificationRequest.RequestStatus.PENDING)) {
+            if (r.getMonthAllocations() != null && !r.getMonthAllocations().isEmpty()) {
+                for (PaymentVerificationRequestMonth a : r.getMonthAllocations()) {
+                    months.add(a.getPaymentMonth());
+                }
+            } else if (r.getPaymentMonth() != null) {
+                months.add(r.getPaymentMonth());
+            }
+        }
+        return months;
+    }
+
+    /**
+     * Validates the resident's selected months and builds the (unsaved)
+     * per-month allocation rows, each amount computed AUTHORITATIVELY on
+     * the server as the exact remaining balance for that month — the
+     * client only sends which months were selected, never a per-month
+     * amount, so a tampered/mismatched client total can never be stored.
+     */
+    private List<PaymentVerificationRequestMonth> buildValidatedMonthAllocations(
+            Resident resident, List<String> months) {
+
+        if (months == null || months.isEmpty())
+            throw new CustomException("Select at least one month to pay", HttpStatus.BAD_REQUEST);
+
+        List<String> distinctMonths = months.stream().distinct().sorted().collect(Collectors.toList());
+        if (distinctMonths.size() != months.size())
+            throw new CustomException("Duplicate months in selection", HttpStatus.BAD_REQUEST);
+
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+        if (required.compareTo(BigDecimal.ZERO) <= 0)
+            throw new CustomException("No maintenance amount configured for this property", HttpStatus.BAD_REQUEST);
+
+        String currentMonthKey = currentMonthStr();
+        Set<String> lockedMonths = pendingMonthsForResident(resident.getId());
+
+        List<PaymentVerificationRequestMonth> allocations = new ArrayList<>();
+        for (String month : distinctMonths) {
+            if (month == null || !month.matches("\\d{4}-\\d{2}"))
+                throw new CustomException("Invalid month: " + month, HttpStatus.BAD_REQUEST);
+
+            if (month.compareTo(currentMonthKey) > 0)
+                throw new CustomException(
+                        monthLabelFor(month) + " has not been billed yet and cannot be paid in advance.",
+                        HttpStatus.BAD_REQUEST);
+
+            if (lockedMonths.contains(month))
+                throw new CustomException(
+                        "A payment request for " + monthLabelFor(month) + " is already pending verification.",
+                        HttpStatus.BAD_REQUEST);
+
+            Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), month);
+            BigDecimal paidSoFar = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+            BigDecimal remaining = required.subtract(paidSoFar).max(BigDecimal.ZERO);
+
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0)
+                throw new CustomException(
+                        monthLabelFor(month) + " has already been fully paid.", HttpStatus.BAD_REQUEST);
+
+            allocations.add(PaymentVerificationRequestMonth.builder()
+                    .paymentMonth(month)
+                    .amount(remaining)
+                    .build());
+        }
+        return allocations;
+    }
+
+    @Transactional
+    public PaymentVerificationRequestDTO submitMultiMonthRequest(
+            Long residentId,
+            Long submittedByResidentId,
+            String submittedName,
+            String phoneNumber,
+            List<String> months,
+            String transactionId,
+            MultipartFile screenshot) throws IOException {
+
+        Resident resident = resolveOwner(residentId);
+        List<PaymentVerificationRequestMonth> allocations = buildValidatedMonthAllocations(resident, months);
+        BigDecimal total = allocations.stream().map(PaymentVerificationRequestMonth::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (transactionId == null || transactionId.isBlank())
+            throw new CustomException("Transaction ID is required", HttpStatus.BAD_REQUEST);
+
+        String screenshotUrl = null, screenshotPublicId = null, screenshotFileName = null;
+        if (screenshot != null && !screenshot.isEmpty()) {
+            CloudinaryService.UploadResult uploaded = cloudinaryService.upload(screenshot, CLOUDINARY_FOLDER);
+            screenshotUrl      = uploaded.secureUrl();
+            screenshotPublicId = uploaded.publicId();
+            screenshotFileName = screenshot.getOriginalFilename();
+        }
+
+        String monthsKey = allocations.stream()
+                .map(PaymentVerificationRequestMonth::getPaymentMonth)
+                .collect(Collectors.joining(","));
+
+        PaymentVerificationRequest req = PaymentVerificationRequest.builder()
+                .resident(resident)
+                .submittedByResidentId(submittedByResidentId)
+                .submittedName(submittedName != null ? submittedName : resident.getFullName())
+                .flatNumber(resident.getFlatNumber())
+                .phoneNumber(phoneNumber != null ? phoneNumber : resident.getPhone())
+                .paymentAmount(total)
+                .transactionId(transactionId.trim())
+                .screenshotUrl(screenshotUrl)
+                .screenshotPublicId(screenshotPublicId)
+                .screenshotFileName(screenshotFileName)
+                .paymentMonth(monthsKey)
+                .paymentMethod("GPAY")
+                .isMultiMonth(true)
+                .status(PaymentVerificationRequest.RequestStatus.PENDING)
+                .build();
+
+        allocations.forEach(a -> a.setRequest(req));
+        req.setMonthAllocations(allocations);
+
+        PaymentVerificationRequest saved = verificationRepo.save(req);
+        notificationService.sendPaymentVerificationRequestToAdmin(saved);
+        return toDTO(saved);
+    }
+
+    @Transactional
+    public PaymentVerificationRequestDTO submitMultiMonthCashRequest(
+            Long residentId,
+            Long submittedByResidentId,
+            String submittedName,
+            String phoneNumber,
+            List<String> months,
+            Long paidToAdminId) {
+
+        Resident resident = resolveOwner(residentId);
+        List<PaymentVerificationRequestMonth> allocations = buildValidatedMonthAllocations(resident, months);
+        BigDecimal total = allocations.stream().map(PaymentVerificationRequestMonth::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (paidToAdminId == null)
+            throw new CustomException("Please select the admin you paid cash to", HttpStatus.BAD_REQUEST);
+
+        Admin paidToAdmin = adminRepo.findById(paidToAdminId)
+                .orElseThrow(() -> new CustomException("Selected admin not found", HttpStatus.NOT_FOUND));
+
+        String monthsKey = allocations.stream()
+                .map(PaymentVerificationRequestMonth::getPaymentMonth)
+                .collect(Collectors.joining(","));
+
+        PaymentVerificationRequest req = PaymentVerificationRequest.builder()
+                .resident(resident)
+                .submittedByResidentId(submittedByResidentId)
+                .submittedName(submittedName != null ? submittedName : resident.getFullName())
+                .flatNumber(resident.getFlatNumber())
+                .phoneNumber(phoneNumber != null ? phoneNumber : resident.getPhone())
+                .paymentAmount(total)
+                .transactionId(null)
+                .screenshotUrl(null)
+                .screenshotPublicId(null)
+                .screenshotFileName(null)
+                .paymentMonth(monthsKey)
+                .paymentMethod("CASH")
+                .paidToAdminId(paidToAdminId)
+                .paidToAdminName(paidToAdmin.getName())
+                .isMultiMonth(true)
+                .status(PaymentVerificationRequest.RequestStatus.PENDING)
+                .build();
+
+        allocations.forEach(a -> a.setRequest(req));
+        req.setMonthAllocations(allocations);
+
+        PaymentVerificationRequest saved = verificationRepo.save(req);
+        notificationService.sendCashPaymentRequestToAdmin(saved, paidToAdminId, paidToAdmin.getName());
+        log.info("Multi-month CASH payment request {} submitted by resident {} to admin {}",
+                saved.getId(), resident.getId(), paidToAdmin.getName());
+        return toDTO(saved);
+    }
+
+    @Transactional
+    public PaymentVerificationRequestDTO submitMultiMonthBankTransferRequest(
+            Long residentId,
+            Long submittedByResidentId,
+            String submittedName,
+            String phoneNumber,
+            List<String> months,
+            String referenceId,
+            String bankName,
+            MultipartFile screenshot) throws IOException {
+
+        Resident resident = resolveOwner(residentId);
+        List<PaymentVerificationRequestMonth> allocations = buildValidatedMonthAllocations(resident, months);
+        BigDecimal total = allocations.stream().map(PaymentVerificationRequestMonth::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (referenceId == null || referenceId.isBlank())
+            throw new CustomException("Reference / Transaction ID is required for bank transfer",
+                    HttpStatus.BAD_REQUEST);
+
+        String screenshotUrl = null, screenshotPublicId = null, screenshotFileName = null;
+        if (screenshot != null && !screenshot.isEmpty()) {
+            CloudinaryService.UploadResult uploaded = cloudinaryService.upload(screenshot, CLOUDINARY_FOLDER);
+            screenshotUrl      = uploaded.secureUrl();
+            screenshotPublicId = uploaded.publicId();
+            screenshotFileName = screenshot.getOriginalFilename();
+        }
+
+        String monthsKey = allocations.stream()
+                .map(PaymentVerificationRequestMonth::getPaymentMonth)
+                .collect(Collectors.joining(","));
+
+        PaymentVerificationRequest req = PaymentVerificationRequest.builder()
+                .resident(resident)
+                .submittedByResidentId(submittedByResidentId)
+                .submittedName(submittedName != null ? submittedName : resident.getFullName())
+                .flatNumber(resident.getFlatNumber())
+                .phoneNumber(phoneNumber != null ? phoneNumber : resident.getPhone())
+                .paymentAmount(total)
+                .transactionId(referenceId.trim())
+                .screenshotUrl(screenshotUrl)
+                .screenshotPublicId(screenshotPublicId)
+                .screenshotFileName(screenshotFileName)
+                .paymentMonth(monthsKey)
+                .paymentMethod("BANK_TRANSFER")
+                .bankName(bankName != null && !bankName.isBlank() ? bankName.trim() : null)
+                .isMultiMonth(true)
+                .status(PaymentVerificationRequest.RequestStatus.PENDING)
+                .build();
+
+        allocations.forEach(a -> a.setRequest(req));
+        req.setMonthAllocations(allocations);
+
+        PaymentVerificationRequest saved = verificationRepo.save(req);
+        notificationService.sendBankTransferVerificationRequestToAdmin(saved);
+        log.info("Multi-month BANK_TRANSFER payment request {} submitted by resident {} ref={}",
+                saved.getId(), resident.getId(), referenceId);
+        return toDTO(saved);
+    }
+
+    @Transactional(readOnly = true)
     public List<PaymentVerificationRequestDTO> getAllRequests() {
         return verificationRepo.findAllByOrderByCreatedAtDesc()
                 .stream()
@@ -207,6 +534,7 @@ public class PaymentVerificationService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public List<PaymentVerificationRequestDTO> getRequestsByStatus(String status) {
         PaymentVerificationRequest.RequestStatus s =
                 PaymentVerificationRequest.RequestStatus.valueOf(status.toUpperCase());
@@ -220,6 +548,7 @@ public class PaymentVerificationService {
         return verificationRepo.countByStatus(PaymentVerificationRequest.RequestStatus.PENDING);
     }
 
+    @Transactional(readOnly = true)
     public List<PaymentVerificationRequestDTO> getResidentRequests(Long residentId) {
         return verificationRepo.findByResidentIdOrderByCreatedAtDesc(residentId)
                 .stream()
@@ -255,6 +584,17 @@ public class PaymentVerificationService {
             case "BANK_TRANSFER" -> "BANK_TRANSFER";
             default              -> "UPI";   // GPAY = UPI (existing behaviour preserved)
         };
+
+        // ── Multi-Month Maintenance Payment ─────────────────────────────
+        // A request with populated monthAllocations came from the new
+        // submit-multi* endpoints. It settles 2+ billing months at once,
+        // so it needs one Payment row PER month instead of the single row
+        // the rest of this method creates. Every other request (the
+        // ORIGINAL single-month flow — monthAllocations always empty)
+        // falls straight through to the unchanged code below.
+        if (req.getMonthAllocations() != null && !req.getMonthAllocations().isEmpty()) {
+            return verifyMultiMonthRequest(req, resident, method, storedMethod);
+        }
 
         // ── Task 2 — re-validate remaining balance at VERIFY time ──────────
         //
@@ -313,6 +653,84 @@ public class PaymentVerificationService {
 
         log.info("Payment verification request {} verified → payment {} created for resident {}",
                 requestId, savedPayment.getId(), resident.getId());
+        return toDTO(req);
+    }
+
+    /**
+     * Multi-Month Maintenance Payment — verification path.
+     *
+     * Creates ONE Payment row PER month allocation instead of the single
+     * row verifyRequest() creates for a legacy single-month request. Each
+     * row carries its own paymentMonth/amount (so Maintenance Summary,
+     * Paid/Unpaid Detail and Pending Dues allocate correctly to the actual
+     * month), while paymentDate is "today" (the verification/collection
+     * date) on every row — Financial Summary's collection ledger groups by
+     * paymentDate, so the whole multi-month amount is correctly reported
+     * as one collection in the month it was actually collected, never
+     * split across the earlier billing months.
+     *
+     * Re-validates each month's remaining balance immediately before
+     * creating its Payment row (same duplicate/overpayment protection as
+     * validateRemainingBalanceAtVerification() for the single-month path) —
+     * if any one month was already fully settled by another payment in the
+     * meantime, the ENTIRE request is rejected-in-place with a clear
+     * message identifying the conflicting month, and NO Payment rows are
+     * created for any month (all-or-nothing, so the resident's other,
+     * still-valid months are never left half-processed).
+     *
+     * transactionId must stay globally unique (payments.transaction_id has
+     * a UNIQUE constraint), so each generated row gets the request's own
+     * transaction/reference id suffixed with its billing month
+     * (CASH requests have no transactionId — every row simply stores null,
+     * which MySQL's unique index permits any number of times).
+     */
+    private PaymentVerificationRequestDTO verifyMultiMonthRequest(
+            PaymentVerificationRequest req, Resident resident, String method, String storedMethod) {
+
+        // Re-check every month BEFORE creating any Payment row (all-or-nothing).
+        for (PaymentVerificationRequestMonth alloc : req.getMonthAllocations()) {
+            validateRemainingBalanceAtVerification(resident, alloc.getPaymentMonth(), alloc.getAmount());
+        }
+
+        List<Payment> savedPayments = new ArrayList<>();
+        for (PaymentVerificationRequestMonth alloc : req.getMonthAllocations()) {
+            String baseTxn = req.getTransactionId(); // null for CASH — preserved as null per row
+            String rowTxn  = baseTxn != null ? baseTxn + "-" + alloc.getPaymentMonth() : null;
+
+            Payment payment = Payment.builder()
+                    .resident(resident)
+                    .amount(alloc.getAmount())
+                    .lateFeeAmount(BigDecimal.ZERO)
+                    .paymentStatus(Payment.PaymentStatus.PAID)
+                    .verificationStatus(Payment.VerificationStatus.VERIFIED)
+                    .paymentDate(LocalDate.now())
+                    .paymentMethod(storedMethod)
+                    .transactionId(rowTxn)
+                    .submittedResidentName(req.getSubmittedName())
+                    .paymentMonth(alloc.getPaymentMonth())
+                    .paymentYear(alloc.getPaymentMonth().substring(0, 4))
+                    .description("Verified from multi-month " + method.toLowerCase()
+                            + " payment submission (months: " + req.getPaymentMonth() + ")")
+                    .adminCreated(false)
+                    .build();
+
+            Payment savedPayment = paymentRepo.save(payment);
+            generateReceipt(savedPayment);
+
+            alloc.setPaymentId(savedPayment.getId());
+            savedPayments.add(savedPayment);
+        }
+
+        req.setStatus(PaymentVerificationRequest.RequestStatus.VERIFIED);
+        req.setPaymentId(savedPayments.get(0).getId());
+        verificationRepo.save(req);
+
+        for (Payment p : savedPayments) {
+            notificationService.sendPaymentVerifiedByScreenshotNotification(p, resident);
+        }
+
+        log.info("Multi-month payment verification request {} verified → {} payment(s) created for resident {}",
+                req.getId(), savedPayments.size(), resident.getId());
         return toDTO(req);
     }
 
@@ -537,6 +955,17 @@ public class PaymentVerificationService {
 
         dto.setSubmittedByLabel(submittedByLabel);
         dto.setOwnerName(ownerName);
+
+        if (r.getMonthAllocations() != null && !r.getMonthAllocations().isEmpty()) {
+            List<MonthAllocationDTO> allocDTOs = r.getMonthAllocations().stream()
+                    .sorted(Comparator.comparing(PaymentVerificationRequestMonth::getPaymentMonth))
+                    .map(a -> MonthAllocationDTO.from(a, monthLabelFor(a.getPaymentMonth())))
+                    .collect(Collectors.toList());
+            dto.setMonthAllocations(allocDTOs);
+            dto.setMonthsDisplayLabel(allocDTOs.stream()
+                    .map(MonthAllocationDTO::getMonthLabel)
+                    .collect(Collectors.joining(" + ")));
+        }
         return dto;
     }
 

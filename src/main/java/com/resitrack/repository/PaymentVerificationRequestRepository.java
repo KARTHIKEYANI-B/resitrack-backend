@@ -38,4 +38,15 @@ public interface PaymentVerificationRequestRepository
            "ORDER BY r.createdAt DESC")
     List<PaymentVerificationRequest> findPendingByResidentId(
             @Param("residentId") Long residentId);
+
+    /**
+     * Multi-Month Maintenance Payment — used to check whether ANY month a
+     * resident wants to select (in either a legacy single-month request's
+     * paymentMonth, or a multi-month request's monthAllocations) already
+     * has a PENDING request against it, so the same month can never be
+     * submitted twice while an earlier submission is still awaiting
+     * admin verification.
+     */
+    List<PaymentVerificationRequest> findByResidentIdAndStatus(
+            Long residentId, PaymentVerificationRequest.RequestStatus status);
 }
