@@ -6,15 +6,21 @@ import com.resitrack.entity.ExpenseCategoryEntity;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.ExpenseCategoryRepository;
 import com.resitrack.repository.ExpenseRepository;
+import com.resitrack.util.NumberToWordsUtil;
+import com.lowagie.text.Document;
+import com.lowagie.text.PageSize;
+import com.lowagie.text.pdf.PdfWriter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.*;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
 
@@ -145,6 +151,65 @@ public class ExpenseService {
         if (!expenseRepo.existsById(id))
             throw new CustomException("Expense not found", HttpStatus.NOT_FOUND);
         expenseRepo.deleteById(id);
+    }
+
+    public Expense getById(Long id) {
+        return expenseRepo.findById(id)
+                .orElseThrow(() -> new CustomException("Expense not found", HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * Generate a PDF Payment Voucher for the given expense, matching the
+     * attached Payment Voucher reference format:
+     *
+     *   RR DHURYA
+     *   Payment Voucher
+     *   No. : <id>                            <date>  Dated :
+     *   ┌─────────────────────────────┬─────────┐
+     *   │ Particulars                 │  Amount │
+     *   ├─────────────────────────────┼─────────┤
+     *   │ Account :                   │         │
+     *   │   <expense name>            │  amount │
+     *   │ Through :                   │         │
+     *   │   <paid through>            │         │
+     *   │ On Account of :             │         │
+     *   │   <description>             │         │
+     *   │ Amount (in words) :         │         │
+     *   │   INR <...> Only            │ ₹ total │
+     *   └─────────────────────────────┴─────────┘
+     *   Receiver's Signature:              Authorised Signatory
+     *
+     * Reuses the same voucher renderer as the Receipt Voucher
+     * (ReceiptService.addVoucherDocument) so both PDFs share an identical
+     * structure/format.
+     */
+    public byte[] generatePaymentVoucherPdf(Expense e) {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            Document doc = new Document(PageSize.LETTER, 50f, 50f, 40f, 40f);
+            PdfWriter.getInstance(doc, baos);
+            doc.open();
+
+            String dateStr = e.getExpenseDate() != null
+                    ? e.getExpenseDate().format(DateTimeFormatter.ofPattern("d-MMM-yy")) : "—";
+            BigDecimal amount = e.getAmount() != null ? e.getAmount() : BigDecimal.ZERO;
+
+            ReceiptService.addVoucherDocument(doc,
+                    "R R Dhurya Owners Welfare Association", "Payment Voucher",
+                    String.valueOf(e.getId()), dateStr,
+                    List.of(new ReceiptService.VoucherLine(e.getExpenseName(), amount, null, false)),
+                    null, null,
+                    e.getPaymentMethod(), e.getDescription() != null ? e.getDescription() : "",
+                    NumberToWordsUtil.amountInWords(amount), amount,
+                    true);
+
+            doc.close();
+            return baos.toByteArray();
+
+        } catch (Exception ex) {
+            throw new CustomException("Failed to generate payment voucher PDF: " + ex.getMessage(),
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+        }
     }
 
     public Expense uploadReceipt(Long id, MultipartFile file, String uploadDir) throws IOException {

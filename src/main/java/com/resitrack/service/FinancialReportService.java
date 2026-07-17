@@ -29,6 +29,11 @@ public class FinancialReportService {
         "Jul","Aug","Sep","Oct","Nov","Dec"
     };
 
+    private static final String[] FULL_MONTHS = {
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
+    };
+
     public Map<String, Object> getCollectionMatrix(int year, int startMonth, int endMonth) {
 
         // Only approved + active OWNER residents — no pending, rejected, deleted, or family-member logins
@@ -451,6 +456,56 @@ public class FinancialReportService {
         result.put("paidThisMonth",   paidThisMonth);
         result.put("collectionRate",  Math.round(collRate * 10.0) / 10.0);
         result.put("monthlySummary",  monthlySummary.values());
+        return result;
+    }
+
+    /**
+     * Yearly Financial Summary — Requirement #4 (Admin / Super Admin).
+     *
+     * Reshapes the same month-wise income/expense figures used by
+     * {@link #getFinancialSummary(int)} (identical repository queries,
+     * so totals always agree with that screen) into the Tally-style
+     * "Sales Register — Monthly Summary" layout from the attached
+     * reference format: one row per financial-year month with
+     * Debit (expenses), Credit (collections) and a running Closing
+     * Balance, plus a Grand Total row.
+     */
+    public Map<String, Object> getYearlySummary(int year) {
+        List<int[]> fyMonths = new ArrayList<>();
+        for (int m = 4; m <= 12; m++) fyMonths.add(new int[]{ year,     m });
+        for (int m = 1; m <= 3;  m++) fyMonths.add(new int[]{ year + 1, m });
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        double running = 0.0, totalDebit = 0.0, totalCredit = 0.0;
+
+        for (int[] ym : fyMonths) {
+            int y = ym[0], m = ym[1];
+            double income  = safe(paymentRepo.sumPaidAmountByPaymentMonth(y + "-" + String.format("%02d", m)));
+            double expense = safe(expenseRepo.sumByYearAndMonth(y, m));
+            running     += income - expense;
+            totalDebit  += expense;
+            totalCredit += income;
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("month",         FULL_MONTHS[m - 1]);
+            row.put("debit",         expense);
+            row.put("credit",        income);
+            row.put("hasActivity",   income != 0.0 || expense != 0.0);
+            row.put("closingBalance", Math.abs(running));
+            row.put("balanceType",   running >= 0 ? "Cr" : "Dr");
+            rows.add(row);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("year",               year);
+        result.put("financialYearLabel", "FY " + year + "-" + String.valueOf(year + 1).substring(2));
+        result.put("periodStart",        year + "-04-01");
+        result.put("periodEnd",          (year + 1) + "-03-31");
+        result.put("rows",               rows);
+        result.put("totalDebit",         totalDebit);
+        result.put("totalCredit",        totalCredit);
+        result.put("closingBalance",     Math.abs(running));
+        result.put("balanceType",        running >= 0 ? "Cr" : "Dr");
         return result;
     }
 

@@ -72,6 +72,28 @@ public class FinancialReportController {
                 reportService.getFinancialSummary(year)));
     }
 
+    // ── Yearly Financial Summary (Requirement #4) ───────────────────────
+    // Tally-style "Sales Register — Monthly Summary" layout: month-wise
+    // Collected/Expense/Closing-Balance, Financial-Year selection.
+    @GetMapping("/admin/financial-report/yearly-summary")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getYearlySummary(
+            @RequestParam(defaultValue = "0") int year) {
+        if (year == 0) year = currentFinancialYearStart();
+        return ResponseEntity.ok(ApiResponse.success(
+                reportService.getYearlySummary(year)));
+    }
+
+    @GetMapping("/admin/financial-report/yearly-summary/export/pdf")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<byte[]> exportYearlySummaryPdf(
+            @RequestParam(defaultValue = "0") int year) throws IOException {
+        if (year == 0) year = currentFinancialYearStart();
+        Map<String, Object> data = reportService.getYearlySummary(year);
+        byte[] pdf = buildYearlySummaryPdf(data);
+        return pdfResponse(pdf, "yearly-summary-" + year + ".pdf");
+    }
+
     @GetMapping("/admin/financial-report/collection/export/pdf")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<byte[]> exportCollectionPdf(
@@ -199,6 +221,86 @@ public class FinancialReportController {
         Map<String, Object> data = reportService.getExpenseReport(year, startMonth, endMonth);
         byte[] xlsx = buildExpenseExcel(data);
         return xlsxResponse(xlsx, "expense-report-" + year + ".xlsx");
+    }
+
+    @SuppressWarnings("unchecked")
+    private byte[] buildYearlySummaryPdf(Map<String, Object> data) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        Document doc = new Document(PageSize.LETTER, 50f, 50f, 40f, 40f);
+        PdfWriter.getInstance(doc, baos);
+        doc.open();
+
+        Font orgFont    = new Font(Font.TIMES_ROMAN, 15f, Font.BOLD,   Color.BLACK);
+        Font titleFont  = new Font(Font.TIMES_ROMAN, 13f, Font.BOLD,   Color.BLACK);
+        Font subFont    = new Font(Font.TIMES_ROMAN, 11f, Font.NORMAL, Color.BLACK);
+        Font headFont   = new Font(Font.TIMES_ROMAN, 11f, Font.BOLD,   Color.BLACK);
+        Font normFont   = new Font(Font.TIMES_ROMAN, 11f, Font.NORMAL, Color.BLACK);
+        Font italicFont = new Font(Font.TIMES_ROMAN, 11f, Font.ITALIC, Color.BLACK);
+        Font boldFont   = new Font(Font.TIMES_ROMAN, 11f, Font.BOLD,   Color.BLACK);
+
+        Paragraph org = new Paragraph(APARTMENT_NAME.toUpperCase(), orgFont);
+        org.setAlignment(Element.ALIGN_CENTER);
+        doc.add(org);
+
+        Paragraph ttl = new Paragraph("Yearly Financial Summary", titleFont);
+        ttl.setAlignment(Element.ALIGN_CENTER);
+        ttl.setSpacingBefore(2f);
+        doc.add(ttl);
+
+        Paragraph sub = new Paragraph("Monthly Summary", subFont);
+        sub.setAlignment(Element.ALIGN_CENTER);
+        doc.add(sub);
+
+        String periodLabel = fmtDate(str(data.get("periodStart"))) + " to " + fmtDate(str(data.get("periodEnd")));
+        Paragraph period = new Paragraph(periodLabel, subFont);
+        period.setAlignment(Element.ALIGN_CENTER);
+        period.setSpacingAfter(10f);
+        doc.add(period);
+
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) data.get("rows");
+
+        PdfPTable table = new PdfPTable(4);
+        table.setWidthPercentage(100f);
+        table.setWidths(new float[]{40f, 20f, 20f, 20f});
+
+        addYsCell(table, "Particulars", headFont, Element.ALIGN_LEFT,
+                Rectangle.TOP | Rectangle.BOTTOM);
+        addYsCell(table, "Debit", headFont, Element.ALIGN_RIGHT,
+                Rectangle.TOP | Rectangle.BOTTOM | Rectangle.LEFT);
+        addYsCell(table, "Credit", headFont, Element.ALIGN_RIGHT,
+                Rectangle.TOP | Rectangle.BOTTOM);
+        addYsCell(table, "Closing Balance", headFont, Element.ALIGN_RIGHT,
+                Rectangle.TOP | Rectangle.BOTTOM | Rectangle.LEFT);
+
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                boolean active = Boolean.TRUE.equals(row.get("hasActivity"));
+                addYsCell(table, str(row.get("month")), normFont, Element.ALIGN_LEFT, Rectangle.NO_BORDER);
+                addYsCell(table, active ? fmtIndian(row.get("debit")) : "", italicFont, Element.ALIGN_RIGHT, Rectangle.LEFT);
+                addYsCell(table, active ? fmtIndian(row.get("credit")) : "", italicFont, Element.ALIGN_RIGHT, Rectangle.NO_BORDER);
+                addYsCell(table, active ? (fmtIndian(row.get("closingBalance")) + " " + str(row.get("balanceType"))) : "",
+                        normFont, Element.ALIGN_RIGHT, Rectangle.LEFT);
+            }
+        }
+
+        addYsCell(table, "Grand Total", boldFont, Element.ALIGN_LEFT, Rectangle.TOP);
+        addYsCell(table, fmtIndian(data.get("totalDebit")), boldFont, Element.ALIGN_RIGHT, Rectangle.TOP | Rectangle.LEFT);
+        addYsCell(table, fmtIndian(data.get("totalCredit")), boldFont, Element.ALIGN_RIGHT, Rectangle.TOP);
+        addYsCell(table, fmtIndian(data.get("closingBalance")) + " " + str(data.get("balanceType")),
+                boldFont, Element.ALIGN_RIGHT, Rectangle.TOP | Rectangle.LEFT);
+
+        doc.add(table);
+        doc.close();
+        return baos.toByteArray();
+    }
+
+    private void addYsCell(PdfPTable table, String text, Font font, int align, int border) {
+        PdfPCell c = new PdfPCell(new Phrase(text, font));
+        c.setBorder(border);
+        c.setBorderColor(Color.BLACK);
+        c.setHorizontalAlignment(align);
+        c.setPadding(4f);
+        table.addCell(c);
     }
 
     @SuppressWarnings("unchecked")
@@ -589,6 +691,26 @@ public class FinancialReportController {
         if (v == null) return "0.00";
         if (v instanceof Number n) return String.format("%,.2f", n.doubleValue());
         return v.toString();
+    }
+    /** Indian digit grouping with 2 decimals, e.g. 289107.0 -> "2,89,107.00" — matches the reference format. */
+    private String fmtIndian(Object v) {
+        double d = toDouble(v);
+        boolean negative = d < 0;
+        java.math.BigDecimal value = java.math.BigDecimal.valueOf(Math.abs(d))
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+        String plain = value.toPlainString();
+        String[] parts = plain.split("\\.");
+        String intPart = parts[0];
+        String decPart = parts.length > 1 ? parts[1] : "00";
+        String lastThree = intPart.length() > 3 ? intPart.substring(intPart.length() - 3) : intPart;
+        String remaining  = intPart.length() > 3 ? intPart.substring(0, intPart.length() - 3) : "";
+        StringBuilder grouped = new StringBuilder();
+        for (int i = remaining.length(); i > 0; i -= 2) {
+            int start = Math.max(0, i - 2);
+            grouped.insert(0, remaining.substring(start, i) + (start > 0 ? "," : ""));
+        }
+        String result = (grouped.length() > 0 ? grouped + "," : "") + lastThree + "." + decPart;
+        return (negative ? "-" : "") + result;
     }
     private String str(Object v) { return v == null ? "" : v.toString(); }
     private double toDouble(Object v) {

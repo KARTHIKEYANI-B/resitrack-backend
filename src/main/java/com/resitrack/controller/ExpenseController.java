@@ -6,6 +6,8 @@ import com.resitrack.entity.ExpenseCategoryEntity;
 import com.resitrack.service.ExpenseService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -87,5 +89,16 @@ public class ExpenseController {
             @RequestParam("file") MultipartFile file) throws IOException {
         return ResponseEntity.ok(ApiResponse.success("Uploaded",
                 expenseService.uploadReceipt(id, file, uploadDir)));
+    }
+
+    @GetMapping("/{id}/voucher")
+    public ResponseEntity<byte[]> downloadPaymentVoucher(@PathVariable Long id) {
+        Expense expense = expenseService.getById(id);
+        byte[] pdf = expenseService.generatePaymentVoucherPdf(expense);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"payment-voucher-" + id + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
     }
 }
