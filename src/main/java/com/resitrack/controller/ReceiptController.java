@@ -77,12 +77,7 @@ public class ReceiptController {
                 .body(pdf);
     }
 
-    /**
-     * Requirement #5 (Access Control): an Owner/Family Member may only
-     * view/download receipts that belong to their own flat. Family
-     * Members resolve to their linked Owner first (same rule the receipt
-     * list endpoint already uses), so both accounts share the same check.
-     */
+
     private void assertOwnedByCaller(ReceiptResponseDTO receipt, Authentication auth) {
         Resident r     = residentService.getByEmail(auth.getName());
         Resident owner = residentService.getEffectiveOwnerResident(r);
