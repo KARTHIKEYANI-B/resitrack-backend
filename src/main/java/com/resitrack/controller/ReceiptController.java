@@ -57,19 +57,38 @@ public class ReceiptController {
 
     @GetMapping("/user/receipts/{id}")
     @PreAuthorize("hasRole('USER')")
-    public ResponseEntity<ApiResponse<ReceiptResponseDTO>> getUserReceiptById(@PathVariable Long id) {
-        return ResponseEntity.ok(ApiResponse.success(receiptService.getById(id)));
+    public ResponseEntity<ApiResponse<ReceiptResponseDTO>> getUserReceiptById(
+            @PathVariable Long id, Authentication auth) {
+        ReceiptResponseDTO receipt = receiptService.getById(id);
+        assertOwnedByCaller(receipt, auth);
+        return ResponseEntity.ok(ApiResponse.success(receipt));
     }
 
     @GetMapping("/user/receipts/{id}/download")
     @PreAuthorize("hasRole('USER')")
-    public ResponseEntity<byte[]> userDownloadReceipt(@PathVariable Long id) {
+    public ResponseEntity<byte[]> userDownloadReceipt(@PathVariable Long id, Authentication auth) {
         ReceiptResponseDTO receipt = receiptService.getById(id);
+        assertOwnedByCaller(receipt, auth);
         byte[] pdf = receiptService.generateReceiptPdf(receipt);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"receipt-" + receipt.getReceiptNumber() + ".pdf\"")
                 .contentType(MediaType.APPLICATION_PDF)
                 .body(pdf);
+    }
+
+    /**
+     * Requirement #5 (Access Control): an Owner/Family Member may only
+     * view/download receipts that belong to their own flat. Family
+     * Members resolve to their linked Owner first (same rule the receipt
+     * list endpoint already uses), so both accounts share the same check.
+     */
+    private void assertOwnedByCaller(ReceiptResponseDTO receipt, Authentication auth) {
+        Resident r     = residentService.getByEmail(auth.getName());
+        Resident owner = residentService.getEffectiveOwnerResident(r);
+        if (receipt.getResidentId() == null || !receipt.getResidentId().equals(owner.getId())) {
+            throw new com.resitrack.exception.CustomException(
+                    "Receipt not found", org.springframework.http.HttpStatus.NOT_FOUND);
+        }
     }
 }
