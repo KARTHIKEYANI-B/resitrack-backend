@@ -32,14 +32,17 @@ public class DataInitializer implements CommandLineRunner {
     private final MemberService              memberService;
     private final PasswordEncoder            passwordEncoder;
 
-    private static final String SUPER_ADMIN_EMAIL    = "";
-    private static final String SUPER_ADMIN_NAME     = "";
-    private static final String SUPER_ADMIN_PASSWORD = "";
+    // NOTE: These must stay in sync with the canonical position-email maps in
+    // AdminAssignmentService.POSITION_EMAILS and MemberService.resolvePositionEmail() —
+    // all three places encode the same "one email per committee position" mapping.
+    private static final String SUPER_ADMIN_EMAIL    = "superadmin@gmail.com";
+    private static final String SUPER_ADMIN_NAME     = "Super Admin";
+    private static final String SUPER_ADMIN_PASSWORD = "Admin@123";
 
 
-    private static final String TEST_SUPER_ADMIN_EMAIL    = "";
-    private static final String TEST_SUPER_ADMIN_NAME     = "";
-    private static final String TEST_SUPER_ADMIN_PASSWORD = "";
+    private static final String TEST_SUPER_ADMIN_EMAIL    = "test@gmail.com";
+    private static final String TEST_SUPER_ADMIN_NAME     = "Test Super Admin";
+    private static final String TEST_SUPER_ADMIN_PASSWORD = "Admin@123";
     private static final String TEST_SUPER_ADMIN_PHONE    = "";
 
     private static final List<String> SUPER_ADMIN_EMAILS = List.of(
@@ -47,21 +50,21 @@ public class DataInitializer implements CommandLineRunner {
         TEST_SUPER_ADMIN_EMAIL
     );
 
-    private static final String VICE_PRESIDENT_EMAIL    = "";
-    private static final String VICE_PRESIDENT_PASSWORD = "";
-    private static final String VICE_PRESIDENT_NAME     = "";
+    private static final String VICE_PRESIDENT_EMAIL    = "vicepresident@gmail.com";
+    private static final String VICE_PRESIDENT_PASSWORD = "Admin@123";
+    private static final String VICE_PRESIDENT_NAME     = "Vice President";
 
-    private static final String SECRETARY_EMAIL    = "";
-    private static final String SECRETARY_PASSWORD = "";
-    private static final String SECRETARY_NAME     = "";
+    private static final String SECRETARY_EMAIL    = "secretary@gmail.com";
+    private static final String SECRETARY_PASSWORD = "Admin@123";
+    private static final String SECRETARY_NAME     = "Secretary";
 
-    private static final String JOINT_SEC_EMAIL    = "";
-    private static final String JOINT_SEC_PASSWORD = "";
-    private static final String JOINT_SEC_NAME     = "";
+    private static final String JOINT_SEC_EMAIL    = "joinsecratery@gmail.com";
+    private static final String JOINT_SEC_PASSWORD = "Admin@123";
+    private static final String JOINT_SEC_NAME     = "Joint Secretary";
 
-    private static final String TREASURER_EMAIL    = "";
-    private static final String TREASURER_PASSWORD = "";
-    private static final String TREASURER_NAME     = "";
+    private static final String TREASURER_EMAIL    = "treasurer@gmail.com";
+    private static final String TREASURER_PASSWORD = "Admin@123";
+    private static final String TREASURER_NAME     = "Treasurer";
 
     private static final List<String> LEGACY_EMAILS = List.of(
         "admin.president@apartment.com",
