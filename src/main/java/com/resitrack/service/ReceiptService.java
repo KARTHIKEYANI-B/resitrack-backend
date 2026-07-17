@@ -49,7 +49,7 @@ public class ReceiptService {
      *
      *   RR DHURYA
      *   Receipt Voucher
-     *   No. : <receiptNumber>                 <date>  Dated :
+     *   No. : <receiptNumber>                 Dated :   <date>
      *   ┌─────────────────────────────┬─────────┐
      *   │ Particulars                 │  Amount │
      *   ├─────────────────────────────┼─────────┤
@@ -141,7 +141,7 @@ public class ReceiptService {
         noCell.setBorder(Rectangle.TOP | Rectangle.BOTTOM);
         noCell.setBorderColor(Color.BLACK);
         noCell.setPadding(4f);
-        PdfPCell datedCell = new PdfPCell(new Phrase(dateStr + "   Dated :", normFont));
+        PdfPCell datedCell = new PdfPCell(new Phrase("Dated :   " + dateStr, normFont));
         datedCell.setBorder(Rectangle.TOP | Rectangle.BOTTOM);
         datedCell.setBorderColor(Color.BLACK);
         datedCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
