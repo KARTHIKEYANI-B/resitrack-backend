@@ -40,6 +40,20 @@ public class AuthController {
         return ResponseEntity.ok(ApiResponse.success("Login successful", authService.securityLogin(req)));
     }
 
+    // ── Remember Me / Auto-Login: Refresh & Logout ─────────────────────────
+
+    @PostMapping("/refresh")
+    public ResponseEntity<ApiResponse<RefreshTokenResponse>> refresh(@RequestBody RefreshTokenRequest req) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Token refreshed", authService.refreshAccessToken(req.getRefreshToken())));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<ApiResponse<Void>> logout(@RequestBody(required = false) RefreshTokenRequest req) {
+        authService.logout(req != null ? req.getRefreshToken() : null);
+        return ResponseEntity.ok(ApiResponse.success("Logged out successfully", null));
+    }
+
     @PostMapping(value = "/register", consumes = "application/json")
     public ResponseEntity<ApiResponse<RegistrationStatusDTO>> register(
             @Valid @RequestBody RegisterRequest req) {

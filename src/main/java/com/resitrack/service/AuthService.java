@@ -41,6 +41,7 @@ public class AuthService {
     private final VehicleDocumentUploadService vehicleDocumentUploadService;
     private final PasswordEncoder              passwordEncoder;
     private final JwtTokenProvider             jwtTokenProvider;
+    private final RefreshTokenService          refreshTokenService;
     private final NotificationService          notificationService;
 
     private static final DateTimeFormatter DATE_FMT =
@@ -81,7 +82,7 @@ public class AuthService {
                 .or(() -> findByNormalizedPhone(adminRepo::findByPhone, normalizedPhone))
                 .orElse(null);
         if (admin != null && passwordEncoder.matches(password, admin.getPassword())) {
-            return buildAdminResponse(admin);
+            return buildAdminResponse(admin, req.getDeviceType());
         }
 
         // 2. Security guard check (email or phone)
@@ -93,7 +94,7 @@ public class AuthService {
                 throw new CustomException(
                         "INACTIVE:Your security account has been deactivated. Contact the admin.",
                         HttpStatus.FORBIDDEN);
-            return buildSecurityResponse(guard);
+            return buildSecurityResponse(guard, req.getDeviceType());
         }
 
         // 3. Resident / Owner check (email or phone — login credentials)
@@ -101,13 +102,13 @@ public class AuthService {
                 .or(() -> findByNormalizedPhone(residentRepo::findByPhone, normalizedPhone))
                 .orElse(null);
         if (r != null && passwordEncoder.matches(password, r.getPassword())) {
-            return buildResidentResponse(r);
+            return buildResidentResponse(r, req.getDeviceType());
         }
 
         // 4. Family Member check (personal email or phone on the family_members row)
         Resident fmLoginAccount = resolveFamilyMemberLoginByPersonalContact(identifier);
         if (fmLoginAccount != null && passwordEncoder.matches(password, fmLoginAccount.getPassword())) {
-            return buildResidentResponse(fmLoginAccount);
+            return buildResidentResponse(fmLoginAccount, req.getDeviceType());
         }
 
         // Nothing matched an identifier+password pair across any role
@@ -126,7 +127,7 @@ public class AuthService {
         if (!passwordEncoder.matches(req.getPassword(), admin.getPassword()))
             throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
 
-        return buildAdminResponse(admin);
+        return buildAdminResponse(admin, req.getDeviceType());
     }
 
     // ── Security Guard Login (added alongside security module) ────────────
@@ -146,7 +147,7 @@ public class AuthService {
                     "INACTIVE:Your security account has been deactivated. Contact the admin.",
                     HttpStatus.FORBIDDEN);
 
-        return buildSecurityResponse(guard);
+        return buildSecurityResponse(guard, req.getDeviceType());
     }
 
     // ── Resident / Family Member Login (unchanged — kept for backward compat)
@@ -169,7 +170,38 @@ public class AuthService {
         if (!passwordEncoder.matches(req.getPassword(), r.getPassword()))
             throw new CustomException("Invalid credentials", HttpStatus.UNAUTHORIZED);
 
-        return buildResidentResponse(r);
+        return buildResidentResponse(r, req.getDeviceType());
+    }
+
+    // ── Remember Me / Auto-Login: Refresh & Logout ─────────────────────────
+
+    /**
+     * Exchanges a valid, unexpired, non-revoked refresh token for a brand
+     * new access token. Does NOT rotate/replace the refresh token itself
+     * (matches the documented /auth/refresh response contract, which only
+     * returns {accessToken, expiresIn}) — the same refresh token keeps
+     * working for further refreshes until it expires (30 days) or is
+     * revoked (logout, or an admin/security action elsewhere).
+     */
+    public RefreshTokenResponse refreshAccessToken(String refreshToken) {
+        var validated = refreshTokenService.validate(refreshToken);
+        String newAccessToken = jwtTokenProvider.generateTokenFromUsername(validated.getUsername());
+        return RefreshTokenResponse.builder()
+                .accessToken(newAccessToken)
+                .expiresIn(jwtTokenProvider.getExpirationSeconds())
+                .build();
+    }
+
+    /**
+     * Revokes the given refresh token so it (and therefore the ability to
+     * silently mint new access tokens from it) can never be used again.
+     * Always succeeds from the caller's point of view — an already-revoked,
+     * expired, or unknown token is treated as "already logged out" rather
+     * than an error, so the client can safely call this during its own
+     * logout flow without special-casing failures.
+     */
+    public void logout(String refreshToken) {
+        refreshTokenService.revoke(refreshToken);
     }
 
     // ── Self Registration (unchanged behavior; now also creates a Vehicle row) ──
@@ -370,12 +402,16 @@ public class AuthService {
 
     // ── Private helpers ───────────────────────────────────────────────────
 
-    private JwtResponse buildAdminResponse(Admin admin) {
-        String token = jwtTokenProvider.generateTokenFromUsername(admin.getEmail());
+    private JwtResponse buildAdminResponse(Admin admin, String deviceType) {
+        String accessToken  = jwtTokenProvider.generateTokenFromUsername(admin.getEmail());
+        String refreshToken = refreshTokenService.issue("ADMIN", admin.getId(), admin.getEmail(), deviceType);
         boolean superAdminFlag = false;
         try { superAdminFlag = admin.isSuperAdmin(); } catch (Exception ignored) {}
         return JwtResponse.builder()
-                .token(token)
+                .token(accessToken)
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .expiresIn(jwtTokenProvider.getExpirationSeconds())
                 .user(JwtResponse.UserInfo.builder()
                         .id(admin.getId())
                         .name(admin.getName())
@@ -386,10 +422,14 @@ public class AuthService {
                 .build();
     }
 
-    private JwtResponse buildSecurityResponse(SecurityGuard guard) {
-        String token = jwtTokenProvider.generateTokenFromUsername(guard.getEmail());
+    private JwtResponse buildSecurityResponse(SecurityGuard guard, String deviceType) {
+        String accessToken  = jwtTokenProvider.generateTokenFromUsername(guard.getEmail());
+        String refreshToken = refreshTokenService.issue("SECURITY", guard.getId(), guard.getEmail(), deviceType);
         return JwtResponse.builder()
-                .token(token)
+                .token(accessToken)
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .expiresIn(jwtTokenProvider.getExpirationSeconds())
                 .user(JwtResponse.UserInfo.builder()
                         .id(guard.getId())
                         .name(guard.getName())
@@ -399,7 +439,7 @@ public class AuthService {
                 .build();
     }
 
-    private JwtResponse buildResidentResponse(Resident r) {
+    private JwtResponse buildResidentResponse(Resident r, String deviceType) {
         boolean isFamilyMember = false;
         try { isFamilyMember = r.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER; }
         catch (Exception ignored) {}
@@ -422,7 +462,8 @@ public class AuthService {
                     "INACTIVE:Your account has been deactivated. Please contact the admin.",
                     HttpStatus.FORBIDDEN);
 
-        String token = jwtTokenProvider.generateTokenFromUsername(r.getEmail());
+        String accessToken  = jwtTokenProvider.generateTokenFromUsername(r.getEmail());
+        String refreshToken = refreshTokenService.issue("USER", r.getId(), r.getEmail(), deviceType);
 
         JwtResponse.UserInfo.UserInfoBuilder builder = JwtResponse.UserInfo.builder()
                 .id(r.getId())
@@ -446,7 +487,13 @@ public class AuthService {
             builder.residentRole("OWNER");
         }
 
-        return JwtResponse.builder().token(token).user(builder.build()).build();
+        return JwtResponse.builder()
+                .token(accessToken)
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .expiresIn(jwtTokenProvider.getExpirationSeconds())
+                .user(builder.build())
+                .build();
     }
 
     private void notifyAllAdmins(Resident r) {

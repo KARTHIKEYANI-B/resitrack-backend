@@ -64,7 +64,9 @@ public class SecurityConfig {
                     "/auth/security/login",                
                     "/auth/register",
                     "/auth/validate-register-number/**",
-                    "/auth/registration-status/**"
+                    "/auth/registration-status/**",
+                    "/auth/refresh",
+                    "/auth/logout"
                 ).permitAll()
 
                 // TEMPORARY — Brevo SMTP verification endpoint only (no auth

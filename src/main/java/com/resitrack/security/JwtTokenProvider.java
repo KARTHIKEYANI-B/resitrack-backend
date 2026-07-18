@@ -48,6 +48,11 @@ public class JwtTokenProvider {
                 .getSubject();
     }
 
+    /** Access-token validity in seconds — used for the login/refresh response's expiresIn field. */
+    public long getExpirationSeconds() {
+        return jwtExpiration / 1000;
+    }
+
     public boolean validateToken(String token) {
         try {
             Jwts.parser()
