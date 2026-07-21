@@ -180,15 +180,6 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             @Param("startMonth") int startMonth,
             @Param("endMonth") int endMonth);
 
-    @Query("SELECT SUM(p.amount) FROM Payment p WHERE p.resident.id = :residentId " +
-           "AND p.paymentStatus = 'PAID' AND YEAR(p.paymentDate) = :year " +
-           "AND MONTH(p.paymentDate) BETWEEN :startMonth AND :endMonth")
-    Double sumPaidByResidentAndYearRange(
-            @Param("residentId") Long residentId,
-            @Param("year") int year,
-            @Param("startMonth") int startMonth,
-            @Param("endMonth") int endMonth);
-
     @Query("SELECT COUNT(DISTINCT p.resident.id) FROM Payment p " +
            "WHERE p.paymentStatus = 'PENDING_VERIFICATION'")
     long countPendingVerification();

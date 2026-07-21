@@ -113,15 +113,37 @@ public class FinancialReportService {
         // Maintenance Summary screen — instead of querying it per resident.
         Maintenance activeMaint = maintenanceService.getActiveMaintenanceConfig().orElse(null);
 
-        // ── "Pending Amount" column (additive) ──────────────────────────
-        // Kept as a fully separate, additive computation (see
-        // pendingAmountForResident() below) so the existing
-        // estimatePendingDues() method — and the "pendingDues" aggregate it
-        // feeds — is never touched. Same period-length basis it already
-        // uses: number of months this table's own startMonth..endMonth
-        // window spans.
-        boolean isFYForPending   = startMonth > endMonth;
-        int     monthsForPending = isFYForPending ? (12 - startMonth + 1) + endMonth : endMonth;
+        // ── "Pending Amount" column ──────────────────────────────────────
+        // FIX: previously computed via pendingAmountForResident(), which
+        // summed the resident's paid amount over the period using
+        // paymentRepo.sumPaidByResidentAndYearRange() — a paymentDate-keyed
+        // query (YEAR/MONTH(p.paymentDate) BETWEEN ...). Every other figure
+        // on this screen (and Maintenance Summary / Paid-Unpaid Details /
+        // Dashboard) was already migrated to key off p.paymentMonth (the
+        // BILLING month) instead, specifically because a payment's
+        // paymentDate — when it was actually collected/verified — can fall
+        // in a different calendar month than the month it was billed for
+        // (late verification, or a partial installment collected the
+        // following month). That mismatch let Pending Amount silently
+        // disagree with every other screen and with this table's own month
+        // columns, producing the "incorrect/random" values reported.
+        //
+        // Now computed per month, directly from resPayments (the same
+        // paymentMonth-keyed map already built above for this row's own
+        // month cells — see the "PAID payments ... grouped by BILLING
+        // month" block near the top of this method), as:
+        //   pending = Σ over months in [monthKeys] of max(0, maintenance − paidThatMonth)
+        // i.e. each month's shortfall only (a fully-paid month contributes
+        // 0; a partially-paid month contributes its remaining balance,
+        // never a negative "credit" that could offset another month's
+        // due). This is the same rule illustrated in the task spec:
+        //   Apr paid, May paid ₹400 of ₹1000, Jun unpaid
+        //     → pending = (1000-1000) + (1000-400) + (1000-0) = ₹1600
+        // and it reconciles by construction with this table's own "months"
+        // cells, Maintenance Summary, Paid/Unpaid Details, and Dashboard,
+        // since they all read from the same paymentMonth-keyed payment
+        // data for the same period.
+        double totalPendingDues = 0;
 
         for (Resident r : residents) {
             Map<String, BigDecimal> resPayments = paymentMap.getOrDefault(r.getId(), Map.of());
@@ -138,17 +160,20 @@ public class FinancialReportService {
 
             grandTotal = grandTotal.add(rowTotal);
 
+            BigDecimal maintVal = getMonthlyMaintenance(r, activeMaint);
+            double residentPending = pendingAmountForResident(maintVal, resPayments, monthKeys);
+            totalPendingDues += residentPending;
+
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("residentId",   r.getId());
             row.put("flatNo",       r.getFlatNumber() != null ? r.getFlatNumber() : "—");
             row.put("ownerName",    r.getFullName());
             row.put("sqFt",         r.getSqFt() != null ? r.getSqFt() : 0);
             row.put("propertyType", r.getPropertyType() != null ? r.getPropertyType().name() : "FLAT");
-            row.put("maintValue",   getMonthlyMaintenance(r, activeMaint));
+            row.put("maintValue",   maintVal);
             row.put("months",       rowMonths);
             row.put("total",        rowTotal);
-            row.put("pendingAmount", pendingAmountForResident(
-                    r, activeMaint, year, startMonth, endMonth, isFYForPending, monthsForPending));
+            row.put("pendingAmount", residentPending);
             rows.add(row);
         }
 
@@ -200,7 +225,10 @@ public class FinancialReportService {
         result.put("totalCollected", totalCollected);
         result.put("totalExpenses",  totalExpenses);
         result.put("closingBalance", prevBalance + totalCollected - totalExpenses);
-        result.put("pendingDues",    estimatePendingDues(residents, year, startMonth, endMonth));
+        // Same figure as Σ rows[*].pendingAmount — computed in the loop
+        // above from the same per-month, paymentMonth-keyed data, so this
+        // aggregate can never drift from the column it's the sum of.
+        result.put("pendingDues",    totalPendingDues);
         result.put("totalResidents", residents.size());
         return result;
     }
@@ -641,86 +669,33 @@ public class FinancialReportService {
         return maintenanceService.calculateAmountForResident(activeMaint, r.getSqFt());
     }
 
-    // ── Estimated Outstanding Dues ──────────────────────────────────────────
+    // ── "Pending Amount" (per resident, per month, capped) ──────────────────
     //
-    // UNCHANGED FORMULA — only the period the formula is applied to changed:
-    //   expected = maintenanceAmount × numberOfMonthsInPeriod
-    //   paid     = sum of that resident's PAID payments across the period
-    //   pending  = max(0, expected − paid)            (same as before)
+    // FIX: replaces the old estimatePendingDues()/pendingAmountForResident()
+    // pair, which both computed a single whole-period
+    // (maintenance × numberOfMonths) − (paymentDate-ranged paid total) and
+    // could go negative-then-clamp in a way that let an overpayment in one
+    // month mask a shortfall in another, and which relied on the
+    // paymentDate-keyed sumPaidByResidentAndYearRange() query — inconsistent
+    // with every other screen's paymentMonth basis (see the comment above
+    // this method's call site in getCollectionMatrix()).
     //
-    // For a same-calendar-year period (startMonth <= endMonth, e.g. the
-    // default Jan→endMonth view), this is byte-for-byte the original
-    // calculation: numberOfMonths = endMonth, and the paid lookup is
-    // (year, 1, endMonth) — identical to the previous
-    // estimatePendingDues(residents, year, upToMonth) behavior.
-    //
-    // For a Financial Year period (startMonth > endMonth, e.g. Apr→Mar),
-    // the paid lookup is split into the same two same-year sub-ranges used
-    // above for allPayments/totalExpenses (Apr–Dec of `year`, Jan–endMonth
-    // of `year+1`) via the same, unmodified sumPaidByResidentAndYearRange
-    // method — so it actually sums the resident's payments across the real
-    // 12-month FY window instead of the empty range the old single-call
-    // cross-year query would have silently returned.
-    private double estimatePendingDues(List<Resident> residents, int year, int startMonth, int endMonth) {
-        Maintenance activeMaint = maintenanceService.getActiveMaintenanceConfig().orElse(null);
-        boolean isFinancialYear = startMonth > endMonth;
-        int numberOfMonths = isFinancialYear
-                ? (12 - startMonth + 1) + endMonth   // e.g. Apr→Mar = 9 + 3 = 12
-                : endMonth;                          // unchanged: Jan..endMonth
+    // Now computed per month from `resPayments` (paymentMonth-keyed, the
+    // same map used for this row's own month cells):
+    //   pending = Σ over monthKeys of max(0, maintenance − paidThatMonth)
+    // A fully-paid month contributes 0 ("ignore fully paid months"); a
+    // partially-paid month contributes only its remaining balance; an
+    // unpaid month contributes the full maintenance amount. Verified
+    // (paymentStatus = PAID) payments only, matching `resPayments`.
+    private double pendingAmountForResident(BigDecimal maint, Map<String, BigDecimal> resPayments,
+                                             List<String> monthKeys) {
+        if (maint == null || maint.compareTo(BigDecimal.ZERO) <= 0) return 0;
 
         double total = 0;
-        for (Resident r : residents) {
-            BigDecimal maint = getMonthlyMaintenance(r, activeMaint);
-            if (maint.compareTo(BigDecimal.ZERO) == 0) continue;
-
-            double paid;
-            if (isFinancialYear) {
-                paid = safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year, startMonth, 12))
-                     + safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year + 1, 1, endMonth));
-            } else {
-                // Unchanged: identical to the original (year, 1, upToMonth) lookup
-                paid = safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year, 1, endMonth));
-            }
-
-            double expected = maint.doubleValue() * numberOfMonths;
-            total += Math.max(0, expected - paid);
+        for (String key : monthKeys) {
+            BigDecimal paidForMonth = resPayments.getOrDefault(key, BigDecimal.ZERO);
+            total += Math.max(0, maint.doubleValue() - paidForMonth.doubleValue());
         }
         return total;
-    }
-
-    // ── "Pending Amount" column (Financial Summary Overview table) ─────────
-    //
-    // ADDITIVE — new method, does not modify estimatePendingDues() above.
-    //
-    // Deliberately the SAME formula estimatePendingDues() already uses for
-    // this exact report's aggregate "Pending Dues" figure:
-    //   expected = monthly maintenance rate × number of months in the
-    //              table's own period (startMonth..endMonth)
-    //   paid     = that resident's PAID payments across the same period
-    //              (paymentRepo.sumPaidByResidentAndYearRange — the same
-    //              query ResidentPaymentSummaryService/PendingDuesController
-    //              use for Maintenance Summary / Paid-Unpaid Detail /
-    //              Pending Dues, so this reconciles with those screens too)
-    //   pending  = max(0, expected − paid)
-    //
-    // Summing this per resident across all rows therefore always equals
-    // the existing "pendingDues" aggregate on this same report — the two
-    // can never drift apart because they share the same inputs and formula.
-    private double pendingAmountForResident(Resident r, Maintenance activeMaint,
-                                             int year, int startMonth, int endMonth,
-                                             boolean isFinancialYear, int numberOfMonths) {
-        BigDecimal maint = getMonthlyMaintenance(r, activeMaint);
-        if (maint.compareTo(BigDecimal.ZERO) == 0) return 0;
-
-        double paid;
-        if (isFinancialYear) {
-            paid = safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year, startMonth, 12))
-                 + safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year + 1, 1, endMonth));
-        } else {
-            paid = safe(paymentRepo.sumPaidByResidentAndYearRange(r.getId(), year, 1, endMonth));
-        }
-
-        double expected = maint.doubleValue() * numberOfMonths;
-        return Math.max(0, expected - paid);
     }
 }
