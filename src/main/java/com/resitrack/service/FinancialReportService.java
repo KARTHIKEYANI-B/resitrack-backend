@@ -3,10 +3,12 @@ package com.resitrack.service;
 import com.resitrack.entity.Expense;
 import com.resitrack.entity.Maintenance;
 import com.resitrack.entity.Payment;
+import com.resitrack.entity.PropertyType;
 import com.resitrack.entity.Resident;
 import com.resitrack.repository.ExpenseRepository;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ResidentRepository;
+import com.resitrack.util.NaturalOrderComparator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -37,8 +39,22 @@ public class FinancialReportService {
     public Map<String, Object> getCollectionMatrix(int year, int startMonth, int endMonth) {
 
         // Only approved + active OWNER residents — no pending, rejected, deleted, or family-member logins
+        //
+        // FIX: flatNumber is a plain string column ("1", "10", "A-101", ...),
+        // so sorting it directly is lexicographic — "10" sorts before "2",
+        // and FLAT/VILLA rows interleave in whatever order the string
+        // comparison happens to produce, which is what looked "random" here.
+        // Grouped by property type first (FLAT block, then VILLA block —
+        // same convention MaintenanceService's Flat/Villa owner lists
+        // already use), then natural-order by flat/villa number within each
+        // group via the same NaturalOrderComparator that screen and
+        // ResidentPaymentSummaryService already use, so "9" sorts before
+        // "10" and this table's resident order matches those screens'.
         List<Resident> residents = residentRepo.findAllActiveApprovedOwners().stream()
-                .sorted(Comparator.comparing(r -> r.getFlatNumber() != null ? r.getFlatNumber() : ""))
+                .sorted(Comparator
+                        .comparing((Resident r) -> r.getPropertyType() != null ? r.getPropertyType() : PropertyType.FLAT)
+                        .thenComparing(r -> r.getFlatNumber() != null ? r.getFlatNumber() : "",
+                                NaturalOrderComparator.INSTANCE))
                 .collect(Collectors.toList());
 
         // ── Fetch PAID payments for the period, grouped by BILLING month ───
