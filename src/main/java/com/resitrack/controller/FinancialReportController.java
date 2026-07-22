@@ -307,7 +307,8 @@ public class FinancialReportController {
     private byte[] buildCollectionPdf(Map<String, Object> data, int year) throws IOException {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        Document doc = new Document(PageSize.A3.rotate(), 30, 30, 50, 30);
+        // Landscape, slightly more generous margins for an "official statement" look.
+        Document doc = new Document(PageSize.A3.rotate(), 28, 28, 46, 32);
         PdfWriter.getInstance(doc, baos);
         doc.open();
 
@@ -315,7 +316,12 @@ public class FinancialReportController {
         Font subtitleFont= new Font(Font.HELVETICA, 10, Font.BOLD);
         Font normalFont  = new Font(Font.HELVETICA, 8,  Font.NORMAL);
         Font boldFont    = new Font(Font.HELVETICA, 8,  Font.BOLD);
-        Font smallFont   = new Font(Font.HELVETICA, 7,  Font.NORMAL);
+        // FIX: table header cells sit on a near-black background (headerBg
+        // below) but were rendered with boldFont, which has no explicit
+        // color and therefore defaults to black — black text on a near-black
+        // fill, making every column heading unreadable. headerFont is the
+        // same size/weight, just white, so it's actually visible.
+        Font headerFont  = new Font(Font.HELVETICA, 8,  Font.BOLD, Color.WHITE);
 
         // Header
         Paragraph title = new Paragraph(APARTMENT_NAME, titleFont);
@@ -332,22 +338,56 @@ public class FinancialReportController {
         List<String> monthKeys   = (List<String>) data.get("monthKeys");
         List<Map<String, Object>> rows = (List<Map<String, Object>>) data.get("rows");
         Map<String, Object> colTotals  = (Map<String, Object>) data.get("columnTotals");
+        int monthCount = monthLabels != null ? monthLabels.size() : 0;
 
-        int cols = 5 + (monthLabels != null ? monthLabels.size() : 0);
+        // FIX: every logical row (header, each owner row, and the grand-total
+        // row) writes 5 fixed columns (Flat No / Owner Name / Sq.Ft / Type /
+        // Maint.Val) + one cell per month + a final TOTAL cell — i.e.
+        // 6 + monthCount cells. The table was previously constructed with
+        // only "5 + monthCount" columns (the TOTAL column was never counted),
+        // so PdfPTable — which just fills a fixed-width grid left-to-right
+        // and wraps to the next row whenever it's full — pushed every row's
+        // trailing TOTAL cell into the START of the next row. That one-cell
+        // overflow then cascaded down the whole table, which is what showed
+        // up on screen as owner names, flat numbers and monthly values
+        // "shifting" into the wrong columns on every subsequent row.
+        // +1 for the Pending Amount column (mirrors the on-screen Collection
+        // Matrix table, which has Pending Amount as the last column after
+        // TOTAL — see AdminFinancialReport.jsx).
+        int cols = 7 + monthCount;
         PdfPTable table = new PdfPTable(cols);
         table.setWidthPercentage(100);
         table.setSpacingBefore(8f);
+        // Proportional ("auto-fit") column widths: Owner Name gets the most
+        // room since it holds the longest, variable-length text; month
+        // columns share the remainder equally regardless of how many are in
+        // the selected period, so a short (e.g. 3-month) range doesn't end
+        // up with the same cramped columns as a full 12-month FY view.
+        float[] widths = new float[cols];
+        widths[0] = 6f;   // Flat No
+        widths[1] = 16f;  // Owner Name
+        widths[2] = 6f;   // Sq.Ft
+        widths[3] = 6f;   // Type
+        widths[4] = 8f;   // Maint.Val
+        for (int i = 0; i < monthCount; i++) widths[5 + i] = 4.5f;
+        widths[5 + monthCount] = 8f; // TOTAL
+        widths[6 + monthCount] = 9f; // Pending Amount
+        table.setWidths(widths);
 
         Color headerBg = new Color(30, 30, 30);
-        addCell(table, "Flat No",   boldFont, headerBg, Element.ALIGN_CENTER);
-        addCell(table, "Owner Name",boldFont, headerBg, Element.ALIGN_CENTER);
-        addCell(table, "Sq.Ft",     boldFont, headerBg, Element.ALIGN_CENTER);
-        addCell(table, "Type",      boldFont, headerBg, Element.ALIGN_CENTER);
-        addCell(table, "Maint.Val", boldFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "Flat No",   headerFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "Owner Name",headerFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "Sq.Ft",     headerFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "Type",      headerFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "Maint.Val", headerFont, headerBg, Element.ALIGN_CENTER);
         if (monthLabels != null) {
-            for (String m : monthLabels) addCell(table, m, boldFont, headerBg, Element.ALIGN_CENTER);
+            for (String m : monthLabels) addCell(table, m, headerFont, headerBg, Element.ALIGN_CENTER);
         }
-        addCell(table, "TOTAL", boldFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "TOTAL", headerFont, headerBg, Element.ALIGN_CENTER);
+        addCell(table, "Pending Amount", headerFont, headerBg, Element.ALIGN_CENTER);
+        // Repeat this header row on every page the table spans, instead of
+        // only appearing once at the top of page 1.
+        table.setHeaderRows(1);
 
         boolean alt = false;
         if (rows != null) {
@@ -368,6 +408,7 @@ public class FinancialReportController {
                     }
                 }
                 addCell(table, fmt(row.get("total")), boldFont, bg, Element.ALIGN_RIGHT);
+                addCell(table, fmt(row.get("pendingAmount")), boldFont, bg, Element.ALIGN_RIGHT);
                 alt = !alt;
             }
         }
@@ -383,6 +424,10 @@ public class FinancialReportController {
                 addCell(table, fmt(colTotals.get(key)), boldFont, totalBg, Element.ALIGN_RIGHT);
         }
         addCell(table, fmt(data.get("grandTotal")), boldFont, totalBg, Element.ALIGN_RIGHT);
+        // Same figure as the on-screen Pending Amount column total — both
+        // are Σ rows[*].pendingAmount, computed by FinancialReportService,
+        // so this can never drift from what's shown on screen.
+        addCell(table, fmt(data.get("pendingDues")), boldFont, totalBg, Element.ALIGN_RIGHT);
 
         doc.add(table);
 
@@ -418,6 +463,11 @@ public class FinancialReportController {
         Font titleFont  = new Font(Font.HELVETICA, 13, Font.BOLD);
         Font boldFont   = new Font(Font.HELVETICA,  9, Font.BOLD);
         Font normalFont = new Font(Font.HELVETICA,  8, Font.NORMAL);
+        // Same fix as buildCollectionPdf() above: header cells sit on a
+        // near-black background, so they need explicit white text instead
+        // of boldFont's default black — otherwise the headings are
+        // effectively invisible.
+        Font headerFont = new Font(Font.HELVETICA, 9, Font.BOLD, Color.WHITE);
 
         Paragraph title = new Paragraph(APARTMENT_NAME, titleFont);
         title.setAlignment(Element.ALIGN_CENTER); doc.add(title);
@@ -432,7 +482,7 @@ public class FinancialReportController {
         table.setWidths(new float[]{0.5f, 1.5f, 3f, 2f, 1.5f, 1.5f});
         Color headerBg = new Color(30, 30, 30);
         for (String h : new String[]{"#","Date","Description","Category","Method","Amount"})
-            addCell(table, h, boldFont, headerBg, Element.ALIGN_CENTER);
+            addCell(table, h, headerFont, headerBg, Element.ALIGN_CENTER);
 
         List<Map<String, Object>> records = (List<Map<String, Object>>) data.get("records");
         boolean alt = false;
