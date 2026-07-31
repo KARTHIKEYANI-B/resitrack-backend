@@ -37,9 +37,17 @@ public class JwtResponse {
         private String flatType;
         private String propertyType;
 
-        private boolean superAdmin;         
+        private boolean superAdmin;
 
-        private String residentRole;        
+        // Admin "Owner" tier — deliberately NOT named `owner`/`isOwner` to
+        // avoid colliding with the pre-existing, unrelated Resident concept
+        // of the same name (residentRole == "OWNER" vs "FAMILY_MEMBER",
+        // exposed as AuthContext's isOwner below). This field is about the
+        // Admin-side role hierarchy (Owner > Super Admin > Admin), not
+        // residency.
+        private boolean systemOwner;
+
+        private String residentRole;
         private Long   ownerResidentId;     
         private Long   familyMemberId;      
         private String relationship;        

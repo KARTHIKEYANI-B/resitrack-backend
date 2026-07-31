@@ -69,11 +69,6 @@ public class SecurityConfig {
                     "/auth/logout"
                 ).permitAll()
 
-                // TEMPORARY — Brevo SMTP verification endpoint only (no auth
-                // logic touched). Remove this line if/when the endpoint
-                // itself is removed after Forgot Password ships.
-                .requestMatchers(HttpMethod.POST, "/test/send-email").permitAll()
-
                 .requestMatchers("/uploads/**").permitAll()
 
                 

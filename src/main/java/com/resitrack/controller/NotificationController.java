@@ -33,7 +33,9 @@ public class NotificationController {
         if (admin == null) {
             return ResponseEntity.ok(notifService.getAllForAdmin());
         }
-        return ResponseEntity.ok(notifService.getAllForAdmin(admin.getId(), admin.isSuperAdmin()));
+        // System Owner sees every admin-targeted notification, same as Super Admin.
+        return ResponseEntity.ok(notifService.getAllForAdmin(admin.getId(),
+                admin.isSuperAdmin() || admin.isSystemOwner()));
     }
 
     @GetMapping("/admin/notifications/unread-count")
@@ -44,7 +46,8 @@ public class NotificationController {
         if (admin == null) {
             count = notifService.getAdminUnreadCount();
         } else {
-            count = notifService.getAdminUnreadCount(admin.getId(), admin.isSuperAdmin());
+            count = notifService.getAdminUnreadCount(admin.getId(),
+                    admin.isSuperAdmin() || admin.isSystemOwner());
         }
         return ResponseEntity.ok(ApiResponse.success(Map.of("count", count)));
     }

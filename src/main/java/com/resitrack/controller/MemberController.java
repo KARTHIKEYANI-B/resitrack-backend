@@ -75,9 +75,11 @@ public class MemberController {
         }
     }
 
+    // System Owner has every permission Super Admin has (see Admin.java's
+    // `systemOwner` field javadoc), so this accepts either.
     private boolean isSuperAdminSafe(Admin admin) {
         try {
-            return admin.isSuperAdmin();
+            return admin.isSuperAdmin() || admin.isSystemOwner();
         } catch (Exception e) {
             return false;
         }

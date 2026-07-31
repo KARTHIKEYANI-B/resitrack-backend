@@ -389,7 +389,9 @@ public class PaymentService {
         Admin caller = adminRepo.findByEmail(callerEmail)
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
 
-        if (!caller.isSuperAdmin())
+        // System Owner has every permission Super Admin has (see Admin.java's
+        // `systemOwner` field javadoc), so this accepts either.
+        if (!caller.isSuperAdmin() && !caller.isSystemOwner())
             throw new CustomException(
                     "Only Super Admin can delete payment records.", HttpStatus.FORBIDDEN);
 

@@ -1,5 +1,6 @@
 package com.resitrack.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -22,6 +23,9 @@ public class Admin {
     @Column(unique = true, nullable = false)
     private String email;
 
+    // Never serialized into API responses — this is a BCrypt hash, not
+    // something any client should ever receive back.
+    @JsonIgnore
     @Column(nullable = false)
     private String password;
 
@@ -30,6 +34,42 @@ public class Admin {
     @Builder.Default
     @Column(name = "is_super_admin", nullable = false)
     private boolean superAdmin = false;
+
+    // ── Owner tier (above Super Admin) ──────────────────────────────────
+    // A System Owner has every permission Super Admin has (enforced by
+    // OR-ing this flag into the existing superAdmin permission checks —
+    // see AdminAccountController/AdminAssignmentController/MemberController/
+    // SecurityController/PaymentService/NotificationController), plus
+    // Owner-exclusive capabilities (managing Super Admin accounts, system
+    // info). Deliberately kept independent of `superAdmin` rather than also
+    // setting superAdmin=true, so the committee-position-driven single-
+    // Super-Admin logic in AdminAssignmentService (which reassigns
+    // superAdmin whenever the PRESIDENT position changes hands) can never
+    // accidentally touch an Owner account — Owner is not a committee
+    // position and must not be affected by presidency transfers.
+    @Builder.Default
+    @Column(name = "is_system_owner", nullable = false)
+    private boolean systemOwner = false;
+
+    // Mirrors Resident.isActive()/SecurityGuard.isActive() — lets an Owner
+    // deactivate a Super Admin account (login-blocking) without deleting it.
+    //
+    // columnDefinition sets a SQL-level DEFAULT so a fresh install (where
+    // Hibernate creates this whole table in one CREATE TABLE) gets it
+    // right automatically. IMPORTANT for any EXISTING database that
+    // already has admin rows before this column existed: MySQL backfills
+    // a new NOT NULL column added via ALTER TABLE to 0/false for existing
+    // rows regardless of this columnDefinition (Hibernate's ddl-auto=update
+    // only ADDS the column, it doesn't apply the DEFAULT retroactively to
+    // already-existing rows) — which would lock every existing admin out
+    // of login via the AuthService.buildAdminResponse() check below. Run
+    // `UPDATE admins SET is_active = 1 WHERE is_active = 0;` once, ONLY
+    // BEFORE this admin.systemOwner column has ever been used to legitimately
+    // deactivate anyone, immediately after this column is first created on
+    // any pre-existing database (including production).
+    @Builder.Default
+    @Column(name = "is_active", nullable = false, columnDefinition = "TINYINT(1) NOT NULL DEFAULT 1")
+    private boolean active = true;
 
     @Builder.Default
     @Column(name = "force_password_change", nullable = false)

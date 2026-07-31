@@ -165,11 +165,13 @@ public class SecurityController {
         return ResponseEntity.ok(ApiResponse.success("Message sent", notifRepo.save(notif)));
     }
 
+    // System Owner has every permission Super Admin has (see Admin.java's
+    // `systemOwner` field javadoc), so this accepts either.
     private void requireSuperAdmin(Authentication auth) {
         Admin admin = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
         boolean isSa = false;
-        try { isSa = admin.isSuperAdmin(); } catch (Exception ignored) {}
+        try { isSa = admin.isSuperAdmin() || admin.isSystemOwner(); } catch (Exception ignored) {}
         if (!isSa)
             throw new CustomException(
                     "Only Super Admin / President can manage security accounts",

@@ -403,10 +403,24 @@ public class AuthService {
     // ── Private helpers ───────────────────────────────────────────────────
 
     private JwtResponse buildAdminResponse(Admin admin, String deviceType) {
+        // Mirrors the Resident/SecurityGuard inactive-account check — lets a
+        // System Owner deactivate a Super Admin (or any admin) account
+        // without deleting it. Defensive try/catch matches the pattern
+        // below (isSuperAdmin) for the same reason: don't hard-fail login
+        // for every admin if this column is ever momentarily unavailable.
+        boolean activeFlag = true;
+        try { activeFlag = admin.isActive(); } catch (Exception ignored) {}
+        if (!activeFlag)
+            throw new CustomException(
+                    "INACTIVE:Your admin account has been deactivated. Contact the System Owner.",
+                    HttpStatus.FORBIDDEN);
+
         String accessToken  = jwtTokenProvider.generateTokenFromUsername(admin.getEmail());
         String refreshToken = refreshTokenService.issue("ADMIN", admin.getId(), admin.getEmail(), deviceType);
         boolean superAdminFlag = false;
         try { superAdminFlag = admin.isSuperAdmin(); } catch (Exception ignored) {}
+        boolean systemOwnerFlag = false;
+        try { systemOwnerFlag = admin.isSystemOwner(); } catch (Exception ignored) {}
         return JwtResponse.builder()
                 .token(accessToken)
                 .accessToken(accessToken)
@@ -418,6 +432,7 @@ public class AuthService {
                         .email(admin.getEmail())
                         .role("ADMIN")
                         .superAdmin(superAdminFlag)
+                        .systemOwner(systemOwnerFlag)
                         .build())
                 .build();
     }

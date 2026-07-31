@@ -1,5 +1,6 @@
 package com.resitrack.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDate;
@@ -23,6 +24,11 @@ public class Resident {
     @Column(unique = true)
     private String phone;
 
+    // Never serialized into API responses — this is a BCrypt hash, not
+    // something any client should ever receive back. (Was previously
+    // leaking through GET /admin/approvals and the approve/reject
+    // endpoints, which return this entity directly.)
+    @JsonIgnore
     @Column(nullable = false)
     private String password;
 

@@ -58,12 +58,14 @@ public class AdminAssignmentController {
                 assignmentService.revoke(req)));
     }
 
+    // System Owner has every permission Super Admin has (see Admin.java's
+    // `systemOwner` field javadoc), so this accepts either.
     private void requireSuperAdmin(Authentication auth) {
         String email = auth.getName();
         Admin admin = adminRepo.findByEmail(email)
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
         try {
-            if (!admin.isSuperAdmin()) {
+            if (!admin.isSuperAdmin() && !admin.isSystemOwner()) {
                 throw new CustomException(
                         "Only SUPER_ADMIN can manage admin assignments", HttpStatus.FORBIDDEN);
             }

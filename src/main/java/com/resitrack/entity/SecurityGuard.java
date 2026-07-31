@@ -1,5 +1,6 @@
 package com.resitrack.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -25,6 +26,9 @@ public class SecurityGuard {
     @Column(unique = true)
     private String phone;
 
+    // Never serialized into API responses — this is a BCrypt hash, not
+    // something any client should ever receive back.
+    @JsonIgnore
     @Column(nullable = false)
     private String password;
 
