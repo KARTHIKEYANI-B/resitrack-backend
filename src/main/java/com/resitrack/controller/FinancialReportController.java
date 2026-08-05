@@ -390,6 +390,7 @@ public class FinancialReportController {
         table.setHeaderRows(1);
 
         boolean alt = false;
+        boolean anyBatchCell = false;
         if (rows != null) {
             for (Map<String, Object> row : rows) {
                 Color bg = alt ? new Color(245, 245, 245) : Color.WHITE;
@@ -400,11 +401,58 @@ public class FinancialReportController {
                 addCell(table, fmt(row.get("maintValue")),   normalFont, bg, Element.ALIGN_RIGHT);
 
                 Map<String, Object> months = (Map<String, Object>) row.get("months");
+                // Multi-month "Add Payment" batches render as one merged
+                // cell (colspan) spanning every consecutive billing-month
+                // column it covers, showing the real database total —
+                // mirrors AdminFinancialReport.jsx's buildMonthCellGroups().
+                // The underlying `months`/pendingAmount values driving every
+                // other figure on this page are untouched; this only
+                // changes how those same values are grouped visually, so a
+                // colspan cell still consumes exactly as many column-slots
+                // as the single cells it replaces (the fixed `cols` count
+                // above is unaffected).
+                Map<String, Object> monthBatchRaw = (Map<String, Object>) row.get("monthBatch");
+                Map<String, Object> monthBatch = monthBatchRaw != null ? monthBatchRaw : Map.of();
                 if (monthKeys != null && months != null) {
-                    for (String key : monthKeys) {
-                        Object amt = months.get(key);
-                        String val = amt != null && !amt.toString().equals("0") ? fmt(amt) : "—";
-                        addCell(table, val, normalFont, bg, Element.ALIGN_RIGHT);
+                    Set<String> seenBatchIds = new HashSet<>();
+                    int mi = 0;
+                    while (mi < monthKeys.size()) {
+                        String key = monthKeys.get(mi);
+                        Map<String, Object> batch = (Map<String, Object>) monthBatch.get(key);
+
+                        if (batch != null) {
+                            String batchId = (String) batch.get("batchId");
+                            if (!seenBatchIds.contains(batchId)) {
+                                int span = 1;
+                                while (mi + span < monthKeys.size()) {
+                                    Map<String, Object> next = (Map<String, Object>) monthBatch.get(monthKeys.get(mi + span));
+                                    if (next != null && batchId.equals(next.get("batchId"))) span++;
+                                    else break;
+                                }
+                                seenBatchIds.add(batchId);
+                                List<String> batchMonths = (List<String>) batch.get("months");
+                                String val = fmt(batch.get("totalAmount")) + " (" + batchMonths.size() + " mo)";
+                                addCell(table, val, normalFont, bg, Element.ALIGN_RIGHT, span);
+                                anyBatchCell = true;
+                                mi += span;
+                            } else {
+                                // Non-adjacent leftover piece of an
+                                // already-merged batch (e.g. Jan+Mar
+                                // selected, skipping Feb) — colspan can't
+                                // reach across the gap, so show its own
+                                // real amount instead of repeating the total.
+                                Object amt = months.get(key);
+                                String val = (amt != null && !amt.toString().equals("0") ? fmt(amt) : "—") + " ^";
+                                addCell(table, val, normalFont, bg, Element.ALIGN_RIGHT, 1);
+                                anyBatchCell = true;
+                                mi += 1;
+                            }
+                        } else {
+                            Object amt = months.get(key);
+                            String val = amt != null && !amt.toString().equals("0") ? fmt(amt) : "—";
+                            addCell(table, val, normalFont, bg, Element.ALIGN_RIGHT, 1);
+                            mi += 1;
+                        }
                     }
                 }
                 addCell(table, fmt(row.get("total")), boldFont, bg, Element.ALIGN_RIGHT);
@@ -430,6 +478,11 @@ public class FinancialReportController {
         addCell(table, fmt(data.get("pendingDues")), boldFont, totalBg, Element.ALIGN_RIGHT);
 
         doc.add(table);
+
+        if (anyBatchCell) {
+            Font footnoteFont = new Font(Font.HELVETICA, 7, Font.ITALIC, new Color(100, 100, 100));
+            doc.add(new Paragraph("Merged month columns show the full amount of a single multi-month payment. \"^\" marks a month from the same payment that couldn't be merged because it wasn't adjacent to the others.", footnoteFont));
+        }
 
         doc.add(new Paragraph(" "));
         PdfPTable summary = new PdfPTable(2);
@@ -528,9 +581,14 @@ public class FinancialReportController {
     }
 
     private void addCell(PdfPTable table, String text, Font font, Color bg, int align) {
+        addCell(table, text, font, bg, align, 1);
+    }
+
+    private void addCell(PdfPTable table, String text, Font font, Color bg, int align, int colspan) {
         PdfPCell cell = new PdfPCell(new Phrase(text != null ? text : "", font));
         cell.setBackgroundColor(bg); cell.setPadding(5);
         cell.setHorizontalAlignment(align); cell.setBorderColor(Color.LIGHT_GRAY);
+        cell.setColspan(colspan);
         table.addCell(cell);
     }
 
@@ -595,9 +653,45 @@ public class FinancialReportController {
                     setCellNum(r, c++, toDouble(row.get("maintValue")), s);
 
                     Map<String, Object> months = (Map<String, Object>) row.get("months");
+                    // Multi-month "Add Payment" batches get one merged cell
+                    // (Excel merged region) spanning every consecutive
+                    // billing-month column it covers, holding the real
+                    // database total — same grouping as the PDF export and
+                    // the on-screen table (AdminFinancialReport.jsx's
+                    // buildMonthCellGroups()). The underlying `months`
+                    // figures behind every other calculation are untouched.
+                    Map<String, Object> monthBatchRaw = (Map<String, Object>) row.get("monthBatch");
+                    Map<String, Object> monthBatch = monthBatchRaw != null ? monthBatchRaw : Map.of();
                     if (monthKeys != null && months != null) {
-                        for (String key : monthKeys)
-                            setCellNum(r, c++, toDouble(months.get(key)), s);
+                        Set<String> seenBatchIds = new HashSet<>();
+                        int mi = 0;
+                        while (mi < monthKeys.size()) {
+                            String key = monthKeys.get(mi);
+                            Map<String, Object> batch = (Map<String, Object>) monthBatch.get(key);
+
+                            if (batch != null && !seenBatchIds.contains((String) batch.get("batchId"))) {
+                                String batchId = (String) batch.get("batchId");
+                                int span = 1;
+                                while (mi + span < monthKeys.size()) {
+                                    Map<String, Object> next = (Map<String, Object>) monthBatch.get(monthKeys.get(mi + span));
+                                    if (next != null && batchId.equals(next.get("batchId"))) span++;
+                                    else break;
+                                }
+                                seenBatchIds.add(batchId);
+                                int startCol = c;
+                                setCellNum(r, c++, toDouble(batch.get("totalAmount")), s);
+                                for (int k = 1; k < span; k++) {
+                                    Cell blank = r.createCell(c++); blank.setCellStyle(s);
+                                }
+                                if (span > 1) {
+                                    sheet.addMergedRegion(new CellRangeAddress(r.getRowNum(), r.getRowNum(), startCol, startCol + span - 1));
+                                }
+                                mi += span;
+                            } else {
+                                setCellNum(r, c++, toDouble(months.get(key)), s);
+                                mi += 1;
+                            }
+                        }
                     }
                     setCellNum(r, c++, toDouble(row.get("total")), totalStyle);
                     alt = !alt;

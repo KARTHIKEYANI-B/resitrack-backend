@@ -99,6 +99,48 @@ public class FinancialReportService {
                        BigDecimal::add);
         }
 
+        // ── Multi-month "Add Payment" batch info, for display only ────────
+        // Every screen above (months cells, Pending Amount) is deliberately
+        // left untouched — collapsing a batch's amount into one month's
+        // cell would zero out the other covered months in resPayments and
+        // make pendingAmountForResident() think those months were never
+        // paid (see the FIX comment above). Instead, this only records
+        // which cells belong to the same paymentBatchId (2+ rows sharing
+        // one batch, within the requested period) and that batch's real
+        // total, purely so the frontend can badge/tooltip those cells with
+        // "part of a ₹X payment" without changing any figure.
+        Map<Long, Map<String, List<Payment>>> batchesByResident = new HashMap<>();
+        for (Payment p : allPayments) {
+            if (p.getPaymentBatchId() == null || p.getResident() == null || p.getPaymentMonth() == null) continue;
+            batchesByResident
+                .computeIfAbsent(p.getResident().getId(), k -> new HashMap<>())
+                .computeIfAbsent(p.getPaymentBatchId(), k -> new ArrayList<>())
+                .add(p);
+        }
+        Map<Long, Map<String, Map<String, Object>>> batchCellsByResident = new HashMap<>();
+        for (Map.Entry<Long, Map<String, List<Payment>>> resEntry : batchesByResident.entrySet()) {
+            for (List<Payment> batchRows : resEntry.getValue().values()) {
+                if (batchRows.size() < 2) continue; // not a multi-month batch within this period
+
+                List<String> months = batchRows.stream()
+                        .map(Payment::getPaymentMonth)
+                        .sorted()
+                        .collect(Collectors.toList());
+                BigDecimal batchTotal = batchRows.stream()
+                        .map(p -> p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+                Map<String, Object> batchInfo = new LinkedHashMap<>();
+                batchInfo.put("batchId",     batchRows.get(0).getPaymentBatchId());
+                batchInfo.put("months",      months);
+                batchInfo.put("totalAmount", batchTotal);
+
+                Map<String, Map<String, Object>> cellMap = batchCellsByResident
+                        .computeIfAbsent(resEntry.getKey(), k -> new HashMap<>());
+                for (String month : months) cellMap.put(month, batchInfo);
+            }
+        }
+
         List<String> monthKeys   = new ArrayList<>();
         List<String> monthLabels = new ArrayList<>();
 
@@ -190,6 +232,11 @@ public class FinancialReportService {
             row.put("months",       rowMonths);
             row.put("total",        rowTotal);
             row.put("pendingAmount", residentPending);
+            // Display-only annotation — see the batchCellsByResident FIX
+            // comment above. Empty/absent unless this resident has a
+            // multi-month batch payment with 2+ months landing in this
+            // period; frontend uses it purely to badge/tooltip cells.
+            row.put("monthBatch",   batchCellsByResident.getOrDefault(r.getId(), Map.of()));
             rows.add(row);
         }
 

@@ -33,15 +33,37 @@ public class PaymentController {
         return ResponseEntity.ok(paymentService.getAllPayments(status));
     }
 
+    // Creates one Payment row per selected billing month — see
+    // PaymentService.registerAdminPayment() for the multi-month logic.
+    // Always returns a list (length 1 for a single-month selection) so the
+    // response shape is consistent regardless of how many months were
+    // selected.
     @PostMapping("/admin/payments")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<PaymentResponseDTO>> createAdminPayment(
+    public ResponseEntity<ApiResponse<List<PaymentResponseDTO>>> createAdminPayment(
             @RequestBody AdminPaymentRequest req) {
-        PaymentResponseDTO p = paymentService.registerAdminPayment(req);
-        String message = Boolean.TRUE.equals(req.getVerifiedByAdmin())
-                ? "Payment recorded and verified"
-                : "Payment recorded, pending verification";
-        return ResponseEntity.ok(ApiResponse.success(message, p));
+        List<PaymentResponseDTO> created = paymentService.registerAdminPayment(req);
+        boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
+        String monthWord = created.size() == 1 ? "month" : "months";
+        String message = verified
+                ? "Payment recorded and verified for " + created.size() + " " + monthWord
+                : "Payment recorded for " + created.size() + " " + monthWord + ", pending verification";
+        return ResponseEntity.ok(ApiResponse.success(message, created));
+    }
+
+    // Auto-fill support for the "Add Payment" form: given a residentId
+    // (preferred — from the resident search/select dropdown) or, for
+    // backward compatibility, a phone number, returns the resident's name/
+    // flat and current monthly maintenance rate so the frontend can
+    // pre-fill Amount = rate × selected months.
+    // Read-only — see PaymentService.lookupResidentMaintenanceInfo().
+    @GetMapping("/admin/payments/resident-maintenance")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getResidentMaintenanceInfo(
+            @RequestParam(required = false) Long residentId,
+            @RequestParam(required = false) String phone) {
+        return ResponseEntity.ok(ApiResponse.success(
+                paymentService.lookupResidentMaintenanceInfo(residentId, phone)));
     }
 
     @GetMapping("/admin/payments/tracking-stats")

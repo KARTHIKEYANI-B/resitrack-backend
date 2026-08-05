@@ -5,6 +5,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * One row in the Admin → Payment Management unified transaction ledger.
@@ -35,4 +36,13 @@ public class TransactionLedgerEntryDTO {
     private String paymentMethod;
     private String sourceType;      // "MAINTENANCE_PAYMENT" | "BATCH_PAYMENT" | "EXPENSE" — for traceability only
     private Long sourceId;          // id of the underlying Payment / BatchPayment / Expense row
+
+    // Multi-month "Add Payment" submissions (sourceType = MAINTENANCE_PAYMENT
+    // only — see Payment.paymentBatchId) collapse to one ledger row covering
+    // every selected month, instead of one row per month. Null/empty for an
+    // ordinary single-month entry and always null for BATCH_PAYMENT/EXPENSE
+    // rows (unrelated to this feature).
+    private String paymentBatchId;
+    private List<PaymentResponseDTO.MonthLine> monthBreakdown;
+    private BigDecimal batchTotalAmount;
 }

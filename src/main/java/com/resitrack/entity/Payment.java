@@ -56,6 +56,17 @@ public class Payment {
     private String paymentMonth;
     private String paymentYear;
 
+    // Correlates every Payment row created from the same "Add Payment"
+    // submission (one row per billing month covered) — e.g. selecting
+    // Apr/May/Jun in one multi-month admin entry gives all 3 resulting rows
+    // the same paymentBatchId. Null for older rows created before this
+    // column existed, and for any single-month payment made through a path
+    // other than PaymentService.registerAdminPayment. Used to build a
+    // consolidated multi-month receipt (see ReceiptService) instead of N
+    // separate single-month receipts for what the resident experiences as
+    // one payment.
+    private String paymentBatchId;
+
     private String description;
 
     @Builder.Default

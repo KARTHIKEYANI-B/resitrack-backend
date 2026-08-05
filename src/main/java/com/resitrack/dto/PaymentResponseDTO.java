@@ -7,7 +7,7 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-
+import java.util.List;
 
 @Data
 @Builder
@@ -32,6 +32,21 @@ public class PaymentResponseDTO {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    // Correlates this row to sibling rows from the same multi-month "Add
+    // Payment" submission — see Payment.paymentBatchId. Exposed so callers
+    // (batch-aware delete, etc.) can act on the whole batch, not just this
+    // one row.
+    private String paymentBatchId;
+
+    // Populated only by list-view callers (PaymentService.dedupeByBatch —
+    // used for getAllPayments/getTransactionLedger/getResidentPayments)
+    // when this row represents 2+ sibling months collapsed into one entry;
+    // null/empty otherwise, so amount/paymentMonth above stay this specific
+    // row's own single-month figures for every other caller (e.g.
+    // approvePayment/rejectPayment still return one real row, unchanged).
+    private List<MonthLine> monthBreakdown;
+    private BigDecimal      batchTotalAmount;
+
     public static PaymentResponseDTO from(Payment p) {
         return PaymentResponseDTO.builder()
                 .id(p.getId())
@@ -53,6 +68,14 @@ public class PaymentResponseDTO {
                 .adminCreated(Boolean.TRUE.equals(p.getAdminCreated()))
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
+                .paymentBatchId(p.getPaymentBatchId())
                 .build();
+    }
+
+    @Data
+    @Builder
+    public static class MonthLine {
+        private String paymentMonth; // "YYYY-MM"
+        private BigDecimal amount;
     }
 }

@@ -195,6 +195,11 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     List<Payment> findByResidentIdOrderByCreatedAtDesc(Long residentId);
 
+    // Sibling rows created in the same multi-month "Add Payment" submission
+    // (see Payment.paymentBatchId) — used to build a consolidated receipt
+    // showing every month/amount in that one payment instead of just one.
+    List<Payment> findByPaymentBatchIdOrderByPaymentMonthAsc(String paymentBatchId);
+
     boolean existsByResidentIdAndPaymentStatus(Long residentId, Payment.PaymentStatus status);
 
     @Query("SELECT p FROM Payment p WHERE p.paymentStatus = 'PENDING' " +

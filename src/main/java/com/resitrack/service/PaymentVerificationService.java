@@ -885,6 +885,7 @@ public class PaymentVerificationService {
                 .resident(r)
                 .residentName(r.getFullName())
                 .flatNumber(r.getFlatNumber())
+                .propertyType(r.getPropertyType())
                 .residentPhone(r.getPhone())
                 .paymentDate(payment.getPaymentDate())
                 .paidAmount(payment.getAmount())

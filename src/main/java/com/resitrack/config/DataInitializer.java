@@ -3,9 +3,12 @@ package com.resitrack.config;
 import com.resitrack.entity.Admin;
 import com.resitrack.entity.Maintenance;
 import com.resitrack.entity.Member;
+import com.resitrack.entity.PropertyType;
+import com.resitrack.entity.Receipt;
 import com.resitrack.repository.AdminAssignmentRepository;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.MaintenanceRepository;
+import com.resitrack.repository.ReceiptRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.service.MemberService;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +32,7 @@ public class DataInitializer implements CommandLineRunner {
     private final AdminAssignmentRepository  assignmentRepo;
     private final ResidentRepository         residentRepo;
     private final MaintenanceRepository      maintenanceRepo;
+    private final ReceiptRepository          receiptRepo;
     private final MemberService              memberService;
     private final PasswordEncoder            passwordEncoder;
 
@@ -114,7 +118,31 @@ public class DataInitializer implements CommandLineRunner {
         initDefaultPositionAccounts();
         initMaintenance();
         memberService.seedDefaultPositions();
+        backfillReceiptPropertyTypes();
         log.info("=== ResiTrack Data Initialization Complete ===");
+    }
+
+    // One-time backfill: receipts generated before Receipt.propertyType
+    // existed have that column NULL. Every receipt row's Resident FK
+    // (nullable = false) is still valid, so this copies the resident's
+    // current propertyType onto each such receipt — the same "Flat "/"Villa "
+    // prefix logic (ReceiptResponseDTO.from()) then reads a real stored
+    // value for these rows instead of falling back to a live join every
+    // time. Idempotent: findByPropertyTypeIsNull() returns nothing once
+    // every row has been backfilled, so this is a no-op on later restarts.
+    @Transactional
+    protected void backfillReceiptPropertyTypes() {
+        List<Receipt> toBackfill = receiptRepo.findByPropertyTypeIsNullFetchResident();
+        if (toBackfill.isEmpty()) return;
+
+        int updated = 0;
+        for (Receipt r : toBackfill) {
+            PropertyType pt = r.getResident() != null ? r.getResident().getPropertyType() : null;
+            r.setPropertyType(pt != null ? pt : PropertyType.FLAT);
+            updated++;
+        }
+        receiptRepo.saveAll(toBackfill);
+        log.info("Backfilled propertyType on {} existing receipt(s).", updated);
     }
 
 

@@ -18,7 +18,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -43,46 +46,76 @@ public class PaymentService {
         List<Payment> payments = (status != null && !status.isBlank())
                 ? paymentRepo.findByPaymentStatus(Payment.PaymentStatus.valueOf(status.toUpperCase()))
                 : paymentRepo.findAllByOrderByCreatedAtDesc();
-        return payments.stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
+        return dedupeByBatch(payments);
+    }
+
+    // Every sibling row from the same multi-month "Add Payment" batch that
+    // currently shares `payment`'s own status — i.e. the exact set the
+    // Pending Verification list's single consolidated row represents.
+    // Returns just [payment] for an ordinary single-month entry.
+    private List<Payment> batchSiblingsInSameStatus(Payment payment) {
+        if (payment.getPaymentBatchId() == null) return List.of(payment);
+        return paymentRepo.findByPaymentBatchIdOrderByPaymentMonthAsc(payment.getPaymentBatchId())
+                .stream()
+                .filter(p -> p.getPaymentStatus() == payment.getPaymentStatus())
+                .collect(Collectors.toList());
     }
 
     @Transactional
     public PaymentResponseDTO approvePayment(Long paymentId) {
-        Payment p = paymentRepo.findById(paymentId)
+        Payment payment = paymentRepo.findById(paymentId)
                 .orElseThrow(() -> new CustomException("Payment not found", HttpStatus.NOT_FOUND));
 
-        if (p.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
+        if (payment.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
             throw new CustomException("Payment is not pending verification", HttpStatus.BAD_REQUEST);
 
-        if (p.getResident() != null && p.getPaymentMonth() != null) {
-            validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
+        // A consolidated Pending Verification row shows the combined total for
+        // every month in the batch — approving it must approve every one of
+        // those sibling rows, not just this representative one, or the other
+        // months would silently stay stuck pending forever.
+        List<Payment> toApprove = batchSiblingsInSameStatus(payment);
+
+        for (Payment p : toApprove) {
+            if (p.getResident() != null && p.getPaymentMonth() != null) {
+                validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
+            }
         }
 
-        p.setPaymentStatus(Payment.PaymentStatus.PAID);
-        p.setVerificationStatus(Payment.VerificationStatus.VERIFIED);
-        p.setPaymentDate(LocalDate.now());
-        paymentRepo.save(p);
+        LocalDate today = LocalDate.now();
+        for (Payment p : toApprove) {
+            p.setPaymentStatus(Payment.PaymentStatus.PAID);
+            p.setVerificationStatus(Payment.VerificationStatus.VERIFIED);
+            p.setPaymentDate(today);
+            paymentRepo.save(p);
 
-        generateReceipt(p);
-        notificationService.sendPaymentApprovedNotification(p);
-        return PaymentResponseDTO.from(p);
+            generateReceipt(p);
+            notificationService.sendPaymentApprovedNotification(p);
+        }
+        return dedupeByBatch(toApprove).get(0);
     }
 
     @Transactional
     public PaymentResponseDTO rejectPayment(Long paymentId, String reason) {
-        Payment p = paymentRepo.findById(paymentId)
+        Payment payment = paymentRepo.findById(paymentId)
                 .orElseThrow(() -> new CustomException("Payment not found", HttpStatus.NOT_FOUND));
 
-        if (p.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
+        if (payment.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
             throw new CustomException("Payment is not pending verification", HttpStatus.BAD_REQUEST);
 
-        p.setPaymentStatus(Payment.PaymentStatus.PENDING);
-        p.setVerificationStatus(Payment.VerificationStatus.REJECTED);
-        p.setRejectionReason(reason != null ? reason : "Verification failed");
-        paymentRepo.save(p);
+        // See approvePayment() above — reject must cover every sibling month
+        // in the batch, matching what the consolidated row displayed.
+        List<Payment> toReject = batchSiblingsInSameStatus(payment);
+        String rejectionReason = reason != null ? reason : "Verification failed";
 
-        notificationService.sendPaymentRejectedNotification(p);
-        return PaymentResponseDTO.from(p);
+        for (Payment p : toReject) {
+            p.setPaymentStatus(Payment.PaymentStatus.PENDING);
+            p.setVerificationStatus(Payment.VerificationStatus.REJECTED);
+            p.setRejectionReason(rejectionReason);
+            paymentRepo.save(p);
+
+            notificationService.sendPaymentRejectedNotification(p);
+        }
+        return dedupeByBatch(toReject).get(0);
     }
 
     @Transactional
@@ -135,8 +168,61 @@ public class PaymentService {
     }
 
     public List<PaymentResponseDTO> getResidentPayments(Long residentId) {
-        return paymentRepo.findByResidentIdOrderByCreatedAtDesc(residentId)
-                .stream().map(PaymentResponseDTO::from).collect(Collectors.toList());
+        return dedupeByBatch(paymentRepo.findByResidentIdOrderByCreatedAtDesc(residentId));
+    }
+
+    /**
+     * Collapses rows sharing a paymentBatchId (a multi-month "Add Payment"
+     * submission — see Payment.paymentBatchId) down to one representative
+     * entry per (batchId, paymentStatus) group, for "list of payments"
+     * views: Payment Management's ledger/pending list and a resident's
+     * payment history. Grouped by status too, not just batchId, so a batch
+     * that ends up split across statuses (e.g. 2 of 3 months approved, 1
+     * rejected — approvePayment/rejectPayment act on individual rows) shows
+     * each status's own subset combined correctly, rather than mixing a
+     * rejected row's amount into a "paid" total.
+     *
+     * The representative row is the earliest paymentMonth in its group,
+     * carrying the group's combined monthBreakdown/batchTotalAmount (see
+     * PaymentResponseDTO) when the group has 2+ rows; a solo row (no batch,
+     * or the only row left in its status group) passes through unchanged.
+     * Screens that need the real per-month split (Paid/Unpaid Details,
+     * Maintenance Summary, Financial Summary) query Payment rows directly
+     * and are entirely unaffected by this.
+     */
+    private List<PaymentResponseDTO> dedupeByBatch(List<Payment> payments) {
+        Map<String, List<Payment>> groups = new LinkedHashMap<>();
+        for (Payment p : payments) {
+            String key = p.getPaymentBatchId() != null
+                    ? p.getPaymentBatchId() + "|" + p.getPaymentStatus()
+                    : "single-" + p.getId();
+            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(p);
+        }
+
+        List<PaymentResponseDTO> result = new ArrayList<>();
+        for (List<Payment> group : groups.values()) {
+            group.sort(Comparator.comparing(Payment::getPaymentMonth,
+                    Comparator.nullsLast(Comparator.naturalOrder())));
+            Payment representative = group.get(0);
+            PaymentResponseDTO dto = PaymentResponseDTO.from(representative);
+
+            if (group.size() > 1) {
+                List<PaymentResponseDTO.MonthLine> lines = group.stream()
+                        .map(p -> PaymentResponseDTO.MonthLine.builder()
+                                .paymentMonth(p.getPaymentMonth())
+                                .amount(p.getAmount())
+                                .build())
+                        .collect(Collectors.toList());
+                BigDecimal batchTotal = group.stream()
+                        .map(Payment::getAmount)
+                        .filter(Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                dto.setMonthBreakdown(lines);
+                dto.setBatchTotalAmount(batchTotal);
+            }
+            result.add(dto);
+        }
+        return result;
     }
 
     @Transactional
@@ -144,23 +230,31 @@ public class PaymentService {
         List<TransactionLedgerEntryDTO> entries = new ArrayList<>();
 
         // ── Income: owner monthly maintenance payments (PAID only) ────────
-        for (Payment p : paymentRepo.findByPaymentStatus(Payment.PaymentStatus.PAID)) {
-            Resident r = p.getResident();
-            LocalDate txnDate = p.getPaymentDate(); // PAID rows always have a paymentDate (set on approve/verify)
+        // Multi-month "Add Payment" submissions (see Payment.paymentBatchId)
+        // collapse to one ledger row covering every selected month and the
+        // combined total, instead of one row per month — see dedupeByBatch().
+        for (PaymentResponseDTO dto : dedupeByBatch(paymentRepo.findByPaymentStatus(Payment.PaymentStatus.PAID))) {
+            LocalDate txnDate = dto.getPaymentDate(); // PAID rows always have a paymentDate (set on approve/verify)
             if (txnDate == null) continue; // defensive — should not happen for PAID rows
+
+            boolean isBatch = dto.getMonthBreakdown() != null && !dto.getMonthBreakdown().isEmpty();
 
             entries.add(TransactionLedgerEntryDTO.builder()
                     .date(txnDate)
                     .type("INCOME")
                     .category("Monthly Maintenance")
-                    .description(p.getDescription() != null && !p.getDescription().isBlank()
-                            ? p.getDescription() : "Monthly maintenance payment")
-                    .residentName(r != null ? r.getFullName() : p.getSubmittedResidentName())
-                    .flatNumber(r != null ? r.getFlatNumber() : null)
-                    .amount(p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO)
-                    .paymentMethod(p.getPaymentMethod())
+                    .description(dto.getDescription() != null && !dto.getDescription().isBlank()
+                            ? dto.getDescription() : "Monthly maintenance payment")
+                    .residentName(dto.getResidentName())
+                    .flatNumber(dto.getFlatNumber())
+                    .amount(isBatch ? dto.getBatchTotalAmount()
+                            : (dto.getAmount() != null ? dto.getAmount() : BigDecimal.ZERO))
+                    .paymentMethod(dto.getPaymentMethod())
                     .sourceType("MAINTENANCE_PAYMENT")
-                    .sourceId(p.getId())
+                    .sourceId(dto.getId())
+                    .paymentBatchId(dto.getPaymentBatchId())
+                    .monthBreakdown(dto.getMonthBreakdown())
+                    .batchTotalAmount(dto.getBatchTotalAmount())
                     .build());
         }
 
@@ -219,14 +313,41 @@ public class PaymentService {
         return entries;
     }
 
+    /**
+     * Creates one Payment row per selected billing month that actually
+     * receives money (multi-month selection support). req.getPaidAmount()
+     * is now the TOTAL the admin is recording across every selected month
+     * (typically auto-filled by the frontend as monthly rate × month count
+     * — see lookupResidentMaintenanceInfo() below), not a per-month amount.
+     * It is validated against, and sequentially allocated across, each
+     * month's own remaining balance in chronological order (oldest first):
+     * a month already fully paid is skipped entirely, a month with a prior
+     * partial payment only receives up to its own remaining balance, and
+     * allocation stops as soon as the entered total is exhausted — so a
+     * partial multi-month total (e.g. ₹5,000 across 3 months of ₹3,000
+     * each) still creates only as many rows as it actually covers, exactly
+     * mirroring how a partial single-month payment already worked before
+     * multi-month selection existed.
+     *
+     * No schema change was needed for this: the payments table already
+     * allows multiple rows per resident+paymentMonth (that's how partial/
+     * installment payments already worked), so "N months selected" simply
+     * creates up to N of the same row shape that already existed, each
+     * picked up by every existing paymentMonth-keyed query (Financial
+     * Summary, Maintenance Summary, Paid/Unpaid Details, Dashboard) exactly
+     * as a single-month admin payment already was.
+     */
     @Transactional
-    public PaymentResponseDTO registerAdminPayment(AdminPaymentRequest req) {
+    public List<PaymentResponseDTO> registerAdminPayment(AdminPaymentRequest req) {
         if (req.getOwnerPhone() == null || req.getOwnerPhone().isBlank())
             throw new CustomException("Owner phone number is required", HttpStatus.BAD_REQUEST);
         if (req.getPaidAmount() == null || req.getPaidAmount().compareTo(BigDecimal.ZERO) <= 0)
             throw new CustomException("Payment amount must be greater than zero", HttpStatus.BAD_REQUEST);
-        if (req.getPaymentMonth() == null || req.getPaymentMonth().isBlank())
+
+        List<String> months = resolvePaymentMonths(req);
+        if (months.isEmpty())
             throw new CustomException("Billing month is required", HttpStatus.BAD_REQUEST);
+
         if (req.getPaymentDate() == null)
             throw new CustomException("Payment date is required", HttpStatus.BAD_REQUEST);
 
@@ -236,58 +357,206 @@ public class PaymentService {
                 throw new CustomException("Invalid payment method. Use: UPI, BANK_TRANSFER, CASH", HttpStatus.BAD_REQUEST);
         }
 
-        Resident resident = residentRepo.findByPhone(PhoneNormalizer.normalize(req.getOwnerPhone()))
+        Resident resident = resolveResidentForPayment(req.getOwnerPhone());
+
+        // Chronological order (paymentMonth is always "YYYY-MM", so plain
+        // string sort is chronologically correct) — oldest dues get paid
+        // first when the entered total doesn't cover every selected month.
+        List<String> sortedMonths = months.stream().sorted().collect(Collectors.toList());
+
+        // ── Validate against the TOTAL due across every selected month,
+        // not any single month's balance (replaces the old per-month check
+        // that produced "Amount exceeds the remaining balance of XXXX.XX
+        // for this month" even when the total across multiple months was
+        // perfectly valid). ──────────────────────────────────────────────
+        Map<String, BigDecimal> remainingByMonth = remainingBalanceByMonth(resident, sortedMonths);
+        BigDecimal totalRemaining = remainingByMonth.values().stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (totalRemaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(
+                    "Maintenance for the selected month(s) has already been fully paid.", HttpStatus.BAD_REQUEST);
+        }
+        if (req.getPaidAmount().compareTo(totalRemaining) > 0) {
+            throw new CustomException(
+                    "Amount exceeds the total remaining balance of "
+                            + totalRemaining.setScale(2, java.math.RoundingMode.HALF_UP)
+                            + " for the selected month(s).", HttpStatus.BAD_REQUEST);
+        }
+
+        boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
+        Maintenance maint = getActiveMaintenanceConfigForResident(resident);
+        String baseTxnId = (req.getTransactionId() != null && !req.getTransactionId().isBlank())
+                ? req.getTransactionId().trim()
+                : null;
+        long batchTimestamp = System.currentTimeMillis();
+        // Shared by every row this call creates — lets ReceiptService find
+        // all sibling months later and render them as one consolidated
+        // receipt instead of N separate single-month ones. Assigned even
+        // for a single selected month, so "part of a batch" is simply
+        // "batchId has more than one PAID row" rather than a special case.
+        String batchId = UUID.randomUUID().toString();
+
+        List<PaymentResponseDTO> results = new ArrayList<>();
+        BigDecimal amountLeft = req.getPaidAmount();
+        int rowIndex = 0;
+
+        for (String month : sortedMonths) {
+            if (amountLeft.compareTo(BigDecimal.ZERO) <= 0) break; // entered total fully allocated
+
+            BigDecimal remaining = remainingByMonth.getOrDefault(month, BigDecimal.ZERO);
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) continue; // this month already fully paid — skip, no ₹0 row
+
+            BigDecimal alloc = remaining.min(amountLeft);
+            amountLeft = amountLeft.subtract(alloc);
+
+            String year = month.split("-")[0];
+
+            // transactionId is DB-unique, so it can't be reused verbatim
+            // across multiple rows in one admin entry. The first row
+            // created keeps the admin-provided reference exactly as typed
+            // (so it still matches a bank/UPI statement lookup); every
+            // additional row gets a distinguishing suffix. Auto-generated
+            // IDs (no reference provided) get a per-row suffix too, since
+            // System.currentTimeMillis() alone could collide across loop
+            // iterations landing in the same millisecond.
+            String txnId;
+            if (baseTxnId != null) {
+                txnId = (rowIndex == 0) ? baseTxnId : baseTxnId + "-" + (rowIndex + 1);
+            } else {
+                txnId = "ADMIN-" + batchTimestamp + "-" + (rowIndex + 1);
+            }
+            rowIndex++;
+
+            Payment p = Payment.builder()
+                    .resident(resident)
+                    .maintenance(maint)
+                    .amount(alloc)
+                    .lateFeeAmount(BigDecimal.ZERO)
+                    .paymentDate(verified ? req.getPaymentDate() : null)
+                    .paymentMethod(req.getPaymentMode())
+                    .transactionId(txnId)
+                    .paymentBatchId(batchId)
+                    .submittedResidentName(req.getOwnerName())
+                    .paymentStatus(verified ? Payment.PaymentStatus.PAID : Payment.PaymentStatus.PENDING_VERIFICATION)
+                    .verificationStatus(verified ? Payment.VerificationStatus.VERIFIED : Payment.VerificationStatus.PENDING)
+                    .paymentMonth(month)
+                    .paymentYear(year)
+                    .description(req.getDescription())
+                    .adminCreated(true)
+                    .build();
+
+            paymentRepo.save(p);
+
+            if (verified) {
+                generateReceipt(p);
+                notificationService.sendPaymentApprovedNotification(p);
+            } else {
+                notificationService.sendPaymentVerificationRequest(p);
+            }
+
+            results.add(PaymentResponseDTO.from(p));
+        }
+
+        return results;
+    }
+
+    /**
+     * Owner-lookup step for the "Add Payment" form's auto-fill: resolves
+     * the resident by residentId (preferred — direct, from the resident
+     * search/select dropdown, no ambiguity) or, for backward compatibility,
+     * by phone number (same routing rule as registerAdminPayment — a
+     * Family Member's phone resolves to the property's owner) — and
+     * returns their current monthly maintenance rate so the frontend can
+     * pre-fill Amount = rate × selected-month-count. Read-only — creates
+     * nothing, validates nothing about payments.
+     */
+    public Map<String, Object> lookupResidentMaintenanceInfo(Long residentId, String ownerPhone) {
+        Resident resident;
+        if (residentId != null) {
+            resident = residentRepo.findById(residentId)
+                    .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
+        } else if (ownerPhone != null && !ownerPhone.isBlank()) {
+            resident = resolveResidentForPayment(ownerPhone);
+        } else {
+            throw new CustomException("Resident ID or phone number is required", HttpStatus.BAD_REQUEST);
+        }
+
+        BigDecimal monthlyMaintenance = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("residentId",         resident.getId());
+        result.put("residentName",       resident.getFullName());
+        result.put("flatNumber",         resident.getFlatNumber());
+        result.put("phone",              resident.getPhone());
+        result.put("monthlyMaintenance", monthlyMaintenance);
+        return result;
+    }
+
+    /**
+     * Resolves a resident by phone for a payment action — shared by
+     * registerAdminPayment and lookupResidentMaintenanceInfo so both use
+     * the exact same lookup/routing rule (a Family Member's phone number
+     * always resolves to the property's owner record, since that's whose
+     * paymentMonth-keyed balance actually gets credited).
+     */
+    private Resident resolveResidentForPayment(String ownerPhone) {
+        Resident resident = residentRepo.findByPhone(PhoneNormalizer.normalize(ownerPhone))
                 .orElseThrow(() -> new CustomException(
                         "No registered resident found with this phone number", HttpStatus.NOT_FOUND));
 
-        // Route Family Member -> owner, same as the owner self-pay flow, so
-        // the payment always lands on the property's owner record and is
-        // picked up by every owner_resident_id-keyed query (Maintenance
-        // Summary, Pending Dues, Dashboard).
         if (resident.getResidentRole() == Resident.ResidentRole.FAMILY_MEMBER
                 && resident.getOwnerResidentId() != null) {
             resident = residentRepo.findById(resident.getOwnerResidentId()).orElse(resident);
         }
+        return resident;
+    }
 
-        validateRemainingBalance(resident, req.getPaymentMonth(), req.getPaidAmount());
-
-        boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
-
-        String txnId = (req.getTransactionId() != null && !req.getTransactionId().isBlank())
-                ? req.getTransactionId().trim()
-                : "ADMIN-" + System.currentTimeMillis();
-
-        String year = String.valueOf(req.getPaymentMonth().split("-")[0]);
-
-        Maintenance maint = getActiveMaintenanceConfigForResident(resident);
-
-        Payment p = Payment.builder()
-                .resident(resident)
-                .maintenance(maint)
-                .amount(req.getPaidAmount())
-                .lateFeeAmount(BigDecimal.ZERO)
-                .paymentDate(verified ? req.getPaymentDate() : null)
-                .paymentMethod(req.getPaymentMode())
-                .transactionId(txnId)
-                .submittedResidentName(req.getOwnerName())
-                .paymentStatus(verified ? Payment.PaymentStatus.PAID : Payment.PaymentStatus.PENDING_VERIFICATION)
-                .verificationStatus(verified ? Payment.VerificationStatus.VERIFIED : Payment.VerificationStatus.PENDING)
-                .paymentMonth(req.getPaymentMonth())
-                .paymentYear(year)
-                .description(req.getDescription())
-                .adminCreated(true)
-                .build();
-
-        paymentRepo.save(p);
-
-        if (verified) {
-            generateReceipt(p);
-            notificationService.sendPaymentApprovedNotification(p);
-        } else {
-            notificationService.sendPaymentVerificationRequest(p);
+    /**
+     * Per-month remaining balance (required − already-PAID) for a resident
+     * across the given months, floored at zero per month (never negative —
+     * an overpaid month simply contributes 0 to the total, same as the old
+     * single-month validateRemainingBalance's floor). Uses the resident's
+     * current maintenance rate for every month, same as the rest of this
+     * class already does (no historical per-month rate lookup — unchanged
+     * existing behavior/limitation, not something this feature changes).
+     */
+    private Map<String, BigDecimal> remainingBalanceByMonth(Resident resident, List<String> months) {
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+        Map<String, BigDecimal> result = new LinkedHashMap<>();
+        for (String month : months) {
+            if (required.compareTo(BigDecimal.ZERO) <= 0) {
+                result.put(month, BigDecimal.ZERO);
+                continue;
+            }
+            Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), month);
+            BigDecimal totalPaid = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+            BigDecimal remaining = required.subtract(totalPaid);
+            result.put(month, remaining.compareTo(BigDecimal.ZERO) > 0 ? remaining : BigDecimal.ZERO);
         }
+        return result;
+    }
 
-        return PaymentResponseDTO.from(p);
+    /**
+     * Resolves the billing months to create Payment rows for — prefers the
+     * multi-select paymentMonths list, falling back to the original single
+     * paymentMonth field so any other caller of this DTO keeps working
+     * unchanged. De-duplicates (preserving selection order) so accidentally
+     * selecting the same month twice in the UI doesn't create two rows for it.
+     */
+    private List<String> resolvePaymentMonths(AdminPaymentRequest req) {
+        List<String> raw;
+        if (req.getPaymentMonths() != null && !req.getPaymentMonths().isEmpty()) {
+            raw = req.getPaymentMonths();
+        } else if (req.getPaymentMonth() != null && !req.getPaymentMonth().isBlank()) {
+            raw = List.of(req.getPaymentMonth());
+        } else {
+            return List.of();
+        }
+        return raw.stream()
+                .filter(m -> m != null && !m.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
     }
 
     /** Mirrors MaintenanceService.getActiveMaintenanceConfigFor(Resident) without
@@ -379,7 +648,18 @@ public class PaymentService {
      * not just at the database level, and avoids a stale Receipt read
      * inside the same transaction.
      *
-     * @param paymentId   the payment to delete
+     * Batch-aware: if the target payment is part of a multi-month "Add
+     * Payment" submission (Payment.paymentBatchId), every sibling row that
+     * shares that batchId AND the target's own paymentStatus is deleted
+     * too — matching exactly the set of rows dedupeByBatch() folded into
+     * the single ledger/list entry the admin actually clicked delete on
+     * (grouped by status, not just batchId, so this never reaches into a
+     * differently-resolved sibling, e.g. one already rejected separately).
+     * A payment with no batchId (or the only remaining row in its status
+     * group) deletes just itself, unchanged from before.
+     *
+     * @param paymentId   the payment to delete (or the representative row
+     *                    of a batch, from a list view)
      * @param callerEmail the email of the authenticated admin performing
      *                    the deletion (from the JWT/Authentication), used
      *                    to verify Super Admin status server-side
@@ -398,15 +678,21 @@ public class PaymentService {
         Payment payment = paymentRepo.findById(paymentId)
                 .orElseThrow(() -> new CustomException("Payment not found", HttpStatus.NOT_FOUND));
 
-        receiptRepo.findByPaymentId(paymentId).ifPresent(receiptRepo::delete);
+        List<Payment> toDelete = batchSiblingsInSameStatus(payment);
 
-        paymentRepo.delete(payment);
+        for (Payment p : toDelete) {
+            receiptRepo.findByPaymentId(p.getId()).ifPresent(receiptRepo::delete);
+        }
+        paymentRepo.deleteAll(toDelete);
         paymentRepo.flush();
 
-        log.info("Payment {} (resident={}, amount={}, paymentMonth={}) deleted by Super Admin {}",
+        log.info("Payment {} (resident={}, amount={}, paymentMonth={}) deleted by Super Admin {}{}",
                 paymentId,
                 payment.getResident() != null ? payment.getResident().getId() : null,
-                payment.getAmount(), payment.getPaymentMonth(), callerEmail);
+                payment.getAmount(), payment.getPaymentMonth(), callerEmail,
+                toDelete.size() > 1
+                        ? " — batch delete, " + toDelete.size() + " months (" + payment.getPaymentBatchId() + ")"
+                        : "");
     }
 
     private void generateReceipt(Payment payment) {
@@ -423,6 +709,7 @@ public class PaymentService {
                 .payment(payment).resident(r)
                 .residentName(r.getFullName())
                 .flatNumber(r.getFlatNumber())
+                .propertyType(r.getPropertyType())
                 .residentPhone(r.getPhone())
                 .paymentDate(payment.getPaymentDate())
                 .paidAmount(payment.getAmount())

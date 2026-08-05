@@ -5,8 +5,10 @@ import com.lowagie.text.Font;
 import com.lowagie.text.Rectangle;
 import com.lowagie.text.pdf.*;
 import com.resitrack.dto.ReceiptResponseDTO;
+import com.resitrack.entity.Payment;
 import com.resitrack.entity.Receipt;
 import com.resitrack.exception.CustomException;
+import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ReceiptRepository;
 import com.resitrack.util.NumberToWordsUtil;
 import lombok.RequiredArgsConstructor;
@@ -17,8 +19,11 @@ import java.awt.*;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -26,21 +31,92 @@ import java.util.stream.Collectors;
 public class ReceiptService {
 
     private final ReceiptRepository receiptRepo;
+    private final PaymentRepository paymentRepo;
 
     public List<ReceiptResponseDTO> getAllReceipts() {
-        return receiptRepo.findAllByOrderByGeneratedAtDesc()
-                .stream().map(ReceiptResponseDTO::from).collect(Collectors.toList());
+        return toDedupedDTOs(receiptRepo.findAllByOrderByGeneratedAtDesc());
     }
 
     public List<ReceiptResponseDTO> getResidentReceipts(Long residentId) {
-        return receiptRepo.findByResidentIdOrderByGeneratedAtDesc(residentId)
-                .stream().map(ReceiptResponseDTO::from).collect(Collectors.toList());
+        return toDedupedDTOs(receiptRepo.findByResidentIdOrderByGeneratedAtDesc(residentId));
     }
 
     public ReceiptResponseDTO getById(Long id) {
         Receipt r = receiptRepo.findById(id)
                 .orElseThrow(() -> new CustomException("Receipt not found", HttpStatus.NOT_FOUND));
-        return ReceiptResponseDTO.from(r);
+        ReceiptResponseDTO dto = ReceiptResponseDTO.from(r);
+        enrichWithBatchBreakdown(dto, r);
+        return dto;
+    }
+
+    /**
+     * Converts a list of Receipt rows to DTOs, enriched with each one's
+     * multi-month breakdown (if any), and — for LIST views only — collapses
+     * a multi-month batch down to a single representative row (the receipt
+     * for the earliest billing month in that batch) instead of showing one
+     * near-identical row per month. getById() above deliberately does NOT
+     * dedupe: fetching a specific receipt by id always returns it, even if
+     * it's a "hidden" sibling that a list view folds away.
+     */
+    private List<ReceiptResponseDTO> toDedupedDTOs(List<Receipt> receipts) {
+        List<ReceiptResponseDTO> result = new ArrayList<>();
+        for (Receipt r : receipts) {
+            ReceiptResponseDTO dto = ReceiptResponseDTO.from(r);
+            enrichWithBatchBreakdown(dto, r);
+
+            if (dto.getMonthBreakdown() != null && !dto.getMonthBreakdown().isEmpty()) {
+                String earliestMonth = dto.getMonthBreakdown().get(0).getPaymentMonth();
+                if (!Objects.equals(dto.getPaymentMonth(), earliestMonth)) continue; // folded into the earliest month's row
+            }
+            result.add(dto);
+        }
+        return result;
+    }
+
+    /**
+     * Populates monthBreakdown/batchTotalAmount when this receipt's Payment
+     * is part of a multi-month batch (paymentBatchId shared with at least
+     * one other PAID sibling — see Payment.paymentBatchId). Left null/empty
+     * for an ordinary single-month receipt, so paidAmount/totalAmount above
+     * remain the correct figures to show and nothing else about this DTO's
+     * meaning changes.
+     */
+    private void enrichWithBatchBreakdown(ReceiptResponseDTO dto, Receipt r) {
+        Payment payment = r.getPayment();
+        if (payment == null || payment.getPaymentBatchId() == null) return;
+
+        List<Payment> siblings = paymentRepo
+                .findByPaymentBatchIdOrderByPaymentMonthAsc(payment.getPaymentBatchId())
+                .stream()
+                .filter(p -> p.getPaymentStatus() == Payment.PaymentStatus.PAID)
+                .collect(Collectors.toList());
+
+        if (siblings.size() < 2) return; // just this one month — not a multi-month batch
+
+        List<ReceiptResponseDTO.MonthLine> lines = siblings.stream()
+                .map(p -> ReceiptResponseDTO.MonthLine.builder()
+                        .paymentMonth(p.getPaymentMonth())
+                        .amount(p.getAmount())
+                        .build())
+                .collect(Collectors.toList());
+
+        BigDecimal batchTotal = siblings.stream()
+                .map(Payment::getAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        dto.setMonthBreakdown(lines);
+        dto.setBatchTotalAmount(batchTotal);
+    }
+
+    /** "2026-04" -> "Apr 2026", matching the frontend's monthDisplay() convention. */
+    private static String monthLabel(String paymentMonth) {
+        try {
+            YearMonth ym = YearMonth.parse(paymentMonth);
+            return ym.format(DateTimeFormatter.ofPattern("MMM yyyy"));
+        } catch (Exception e) {
+            return paymentMonth != null ? paymentMonth : "";
+        }
     }
 
     /**
@@ -80,18 +156,42 @@ public class ReceiptService {
             BigDecimal late  = r.getLateFeeAmount() != null ? r.getLateFeeAmount() : BigDecimal.ZERO;
             BigDecimal total = r.getTotalAmount()   != null ? r.getTotalAmount()   : paid.add(late);
 
-            String accountLabel = ((r.getFlatNumber() != null ? r.getFlatNumber() : "") + " "
-                    + (r.getResidentName() != null ? r.getResidentName() : "")).trim();
+            // flatLabel is the precomputed "Flat 58" / "Villa 12" string
+            // (ReceiptResponseDTO.from()) — falls back to bare flatNumber
+            // only if a caller ever builds the DTO some other way. Shown
+            // once, in the header's top-right corner (addVoucherDocument),
+            // instead of repeating on every "Account :" line below.
+            String flatPart = r.getFlatLabel() != null ? r.getFlatLabel() : r.getFlatNumber();
+            String accountLabel = r.getResidentName() != null ? r.getResidentName() : "";
             String dateStr = r.getPaymentDate() != null
                     ? r.getPaymentDate().format(DateTimeFormatter.ofPattern("d-MMM-yy")) : "—";
 
+            // Multi-month payment (see Payment.paymentBatchId): one line per
+            // billing month covered, and the total is the sum across all of
+            // them — instead of the single-line, single-month layout below.
+            // No single "Agst Ref" line in this case since each month's
+            // underlying Payment row has its own distinct transactionId.
+            List<VoucherLine> lines;
+            String agstRef = r.getTransactionId();
+            if (r.getMonthBreakdown() != null && !r.getMonthBreakdown().isEmpty()) {
+                lines = r.getMonthBreakdown().stream()
+                        .map(m -> new VoucherLine(
+                                accountLabel + " — " + monthLabel(m.getPaymentMonth()),
+                                m.getAmount(), null, false))
+                        .collect(Collectors.toList());
+                total = r.getBatchTotalAmount() != null ? r.getBatchTotalAmount() : total;
+                agstRef = null;
+            } else {
+                lines = List.of(new VoucherLine(accountLabel, total, null, false));
+            }
+
             addVoucherDocument(doc, orgName, "Receipt Voucher",
                     r.getReceiptNumber(), dateStr,
-                    List.of(new VoucherLine(accountLabel, total, null, false)),
-                    r.getTransactionId(), total,
+                    lines,
+                    agstRef, total,
                     r.getPaymentMethod(), null,
                     NumberToWordsUtil.amountInWords(total), total,
-                    false);
+                    false, flatPart);
 
             doc.close();
             return baos.toByteArray();
@@ -117,21 +217,70 @@ public class ReceiptService {
                                     String through, String onAccountOf,
                                     String amountWords, BigDecimal total,
                                     boolean showReceiverSignature) throws DocumentException {
+        addVoucherDocument(doc, orgName, title, voucherNo, dateStr, accountLines,
+                agstRef, agstRefAmount, through, onAccountOf, amountWords, total,
+                showReceiverSignature, null);
+    }
+
+    // flatLabel ("Flat 58" / "Villa 12") — Receipt Voucher only, shown once in
+    // the top-right corner of the header instead of repeating on every
+    // "Account :" line (see VoucherDocument.jsx for the matching on-screen
+    // rendering). Null/blank for the Payment Voucher (expenses, no
+    // resident), which keeps the original fully-centered header untouched.
+    static void addVoucherDocument(Document doc, String orgName, String title,
+                                    String voucherNo, String dateStr,
+                                    List<VoucherLine> accountLines,
+                                    String agstRef, BigDecimal agstRefAmount,
+                                    String through, String onAccountOf,
+                                    String amountWords, BigDecimal total,
+                                    boolean showReceiverSignature,
+                                    String flatLabel) throws DocumentException {
 
         Font orgFont    = new Font(Font.TIMES_ROMAN, 15f, Font.BOLD,   Color.BLACK);
         Font titleFont  = new Font(Font.TIMES_ROMAN, 13f, Font.BOLD,   Color.BLACK);
         Font normFont   = new Font(Font.TIMES_ROMAN, 11f, Font.NORMAL, Color.BLACK);
         Font totalFont  = new Font(Font.TIMES_ROMAN, 12f, Font.BOLD,   Color.BLACK);
+        Font flatFont   = new Font(Font.TIMES_ROMAN, 10f, Font.BOLD,   Color.BLACK);
 
-        Paragraph org = new Paragraph(orgName.toUpperCase(), orgFont);
-        org.setAlignment(Element.ALIGN_CENTER);
-        doc.add(org);
+        if (flatLabel != null && !flatLabel.isBlank()) {
+            PdfPTable headerRow = new PdfPTable(2);
+            headerRow.setWidthPercentage(100f);
+            headerRow.setWidths(new float[]{80f, 20f});
 
-        Paragraph ttl = new Paragraph(title, titleFont);
-        ttl.setAlignment(Element.ALIGN_CENTER);
-        ttl.setSpacingBefore(2f);
-        ttl.setSpacingAfter(10f);
-        doc.add(ttl);
+            PdfPCell orgCell = new PdfPCell();
+            orgCell.setBorder(Rectangle.NO_BORDER);
+            orgCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+            Paragraph org = new Paragraph(orgName.toUpperCase(), orgFont);
+            org.setAlignment(Element.ALIGN_CENTER);
+            orgCell.addElement(org);
+            Paragraph ttl = new Paragraph(title, titleFont);
+            ttl.setAlignment(Element.ALIGN_CENTER);
+            ttl.setSpacingBefore(2f);
+            orgCell.addElement(ttl);
+            headerRow.addCell(orgCell);
+
+            PdfPCell flatCell = new PdfPCell(new Phrase(flatLabel, flatFont));
+            flatCell.setBorder(Rectangle.BOX);
+            flatCell.setBorderColor(Color.BLACK);
+            flatCell.setBorderWidth(0.75f);
+            flatCell.setHorizontalAlignment(Element.ALIGN_CENTER);
+            flatCell.setVerticalAlignment(Element.ALIGN_TOP);
+            flatCell.setPadding(4f);
+            headerRow.addCell(flatCell);
+
+            headerRow.setSpacingAfter(10f);
+            doc.add(headerRow);
+        } else {
+            Paragraph org = new Paragraph(orgName.toUpperCase(), orgFont);
+            org.setAlignment(Element.ALIGN_CENTER);
+            doc.add(org);
+
+            Paragraph ttl = new Paragraph(title, titleFont);
+            ttl.setAlignment(Element.ALIGN_CENTER);
+            ttl.setSpacingBefore(2f);
+            ttl.setSpacingAfter(10f);
+            doc.add(ttl);
+        }
 
         // No. / Dated row, boxed top+bottom
         PdfPTable noRow = new PdfPTable(2);

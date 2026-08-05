@@ -34,6 +34,16 @@ public class Receipt {
     @Column(nullable = false)
     private String flatNumber;
 
+    // Denormalized copy of the resident's propertyType at receipt-creation
+    // time (same pattern as flatNumber/residentName above) — nullable so
+    // ddl-auto=update's ALTER TABLE ADD COLUMN doesn't try to backfill every
+    // existing row with a NOT NULL default (see Admin.active's javadoc for
+    // why that's dangerous). Null is treated as FLAT everywhere it's read,
+    // matching the same null-safety convention already used for
+    // Resident.propertyType elsewhere in this codebase.
+    @Enumerated(EnumType.STRING)
+    private PropertyType propertyType;
+
     private String residentPhone;
 
     @Column(nullable = false)
