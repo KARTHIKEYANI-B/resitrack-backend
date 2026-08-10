@@ -1,13 +1,14 @@
 package com.resitrack.dto;
 
 import com.resitrack.entity.Payment;
+import com.resitrack.entity.PaymentMonthAllocation;
 import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
+
 
 @Data
 @Builder
@@ -32,22 +33,17 @@ public class PaymentResponseDTO {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    // Correlates this row to sibling rows from the same multi-month "Add
-    // Payment" submission — see Payment.paymentBatchId. Exposed so callers
-    // (batch-aware delete, etc.) can act on the whole batch, not just this
-    // one row.
-    private String paymentBatchId;
-
-    // Populated only by list-view callers (PaymentService.dedupeByBatch —
-    // used for getAllPayments/getTransactionLedger/getResidentPayments)
-    // when this row represents 2+ sibling months collapsed into one entry;
-    // null/empty otherwise, so amount/paymentMonth above stay this specific
-    // row's own single-month figures for every other caller (e.g.
-    // approvePayment/rejectPayment still return one real row, unchanged).
-    private List<MonthLine> monthBreakdown;
-    private BigDecimal      batchTotalAmount;
-
     public static PaymentResponseDTO from(Payment p) {
+        boolean multiMonth = Boolean.TRUE.equals(p.getIsMultiMonth())
+                && p.getMonthAllocations() != null && !p.getMonthAllocations().isEmpty();
+
+        List<String> months = multiMonth
+                ? p.getMonthAllocations().stream()
+                        .map(PaymentMonthAllocation::getPaymentMonth)
+                        .sorted()
+                        .collect(Collectors.toList())
+                : null;
+
         return PaymentResponseDTO.builder()
                 .id(p.getId())
                 .residentName(p.getResident() != null ? p.getResident().getFullName() : "—")
@@ -68,7 +64,6 @@ public class PaymentResponseDTO {
                 .adminCreated(Boolean.TRUE.equals(p.getAdminCreated()))
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
-                .paymentBatchId(p.getPaymentBatchId())
                 .build();
     }
 

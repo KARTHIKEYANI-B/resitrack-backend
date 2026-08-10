@@ -66,6 +66,16 @@ public class PaymentController {
                 paymentService.lookupResidentMaintenanceInfo(residentId, phone)));
     }
 
+    // Backs the "Record Payment" form's searchable resident dropdown —
+    // every active/approved owner with their monthly maintenance amount,
+    // so Amount can be auto-calculated as monthlyMaintenanceAmount ×
+    // selected months without a separate per-resident lookup call.
+    @GetMapping("/admin/payments/eligible-residents")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<List<ResidentMaintenanceInfoDTO>>> getEligibleResidentsForPayment() {
+        return ResponseEntity.ok(ApiResponse.success(paymentService.getEligibleResidentsForPayment()));
+    }
+
     @GetMapping("/admin/payments/tracking-stats")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentTrackingStatsDTO>> getTrackingStats() {

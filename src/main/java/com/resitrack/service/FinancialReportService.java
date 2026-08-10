@@ -3,6 +3,7 @@ package com.resitrack.service;
 import com.resitrack.entity.Expense;
 import com.resitrack.entity.Maintenance;
 import com.resitrack.entity.Payment;
+import com.resitrack.entity.PaymentMonthAllocation;
 import com.resitrack.entity.PropertyType;
 import com.resitrack.entity.Resident;
 import com.resitrack.repository.ExpenseRepository;
@@ -35,6 +36,18 @@ public class FinancialReportService {
         "January","February","March","April","May","June",
         "July","August","September","October","November","December"
     };
+
+    /**
+     * The month NAME only (no year) for the date the money was actually
+     * collected (Payment.paymentDate) — e.g. an admin entry recorded on
+     * 6 Aug 2026 for May+Jun+Jul dues shows "(paid in August)" once, on the
+     * one cell holding the undivided amount, answering "when was this
+     * actually paid" rather than which billing month the ledger anchors to.
+     */
+    private String paymentDateLabel(LocalDate date) {
+        if (date == null) return null;
+        return FULL_MONTHS[date.getMonthValue() - 1];
+    }
 
     public Map<String, Object> getCollectionMatrix(int year, int startMonth, int endMonth) {
 
@@ -89,6 +102,23 @@ public class FinancialReportService {
                 Payment.PaymentStatus.PAID, startKey, endKey);
 
         Map<Long, Map<String, BigDecimal>> paymentMap = new HashMap<>();
+
+        // ── "Covered by a multi-month payment" annotation ──────────────────
+        // A multi-month admin "Record Payment" entry stores its FULL amount
+        // under one primary billing month — the LAST (most recent) month it
+        // funds (paymentMap above, unchanged — Financial Summary
+        // intentionally shows the undivided total, never split) — plus
+        // PaymentMonthAllocation rows for every month it covers. For
+        // display only, this map records residentId -> (billing month ->
+        // month-only label of when it was actually paid, e.g. "August") for
+        // every month the payment covers — the frontend shades every one of
+        // those cells, but only prints the "(paid in August)" text once, on
+        // the single cell holding the undivided amount (identified via
+        // multiMonthPrimaryMonths below), not repeated on every month.
+        // No totals anywhere are affected; both maps are annotation-only.
+        Map<Long, Map<String, String>> coveredByMap        = new HashMap<>();
+        Map<Long, Set<String>>         multiMonthPrimaryMap = new HashMap<>();
+
         for (Payment p : allPayments) {
             if (p.getPaymentMonth() == null || p.getResident() == null) continue;
             Long   resId    = p.getResident().getId();
@@ -97,6 +127,21 @@ public class FinancialReportService {
                 .computeIfAbsent(resId, k -> new LinkedHashMap<>())
                 .merge(monthKey, p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO,
                        BigDecimal::add);
+
+            if (Boolean.TRUE.equals(p.getIsMultiMonth())
+                    && p.getMonthAllocations() != null && !p.getMonthAllocations().isEmpty()) {
+                String paidInLabel = paymentDateLabel(p.getPaymentDate());
+                multiMonthPrimaryMap.computeIfAbsent(resId, k -> new HashSet<>()).add(monthKey);
+                if (paidInLabel != null) {
+                    for (PaymentMonthAllocation alloc : p.getMonthAllocations()) {
+                        String allocMonth = alloc.getPaymentMonth();
+                        if (allocMonth == null) continue;
+                        coveredByMap
+                            .computeIfAbsent(resId, k -> new LinkedHashMap<>())
+                            .put(allocMonth, paidInLabel);
+                    }
+                }
+            }
         }
 
         // ── Multi-month "Add Payment" batch info, for display only ────────
@@ -232,11 +277,6 @@ public class FinancialReportService {
             row.put("months",       rowMonths);
             row.put("total",        rowTotal);
             row.put("pendingAmount", residentPending);
-            // Display-only annotation — see the batchCellsByResident FIX
-            // comment above. Empty/absent unless this resident has a
-            // multi-month batch payment with 2+ months landing in this
-            // period; frontend uses it purely to badge/tooltip cells.
-            row.put("monthBatch",   batchCellsByResident.getOrDefault(r.getId(), Map.of()));
             rows.add(row);
         }
 

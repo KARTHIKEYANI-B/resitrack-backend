@@ -55,10 +55,25 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     Double sumCashPaidByPaymentMonth(@Param("paymentMonth") String paymentMonth);
 
     /**
-     * Property-level paid sum for a given month.
+     * Property-level paid sum for a given BILLING month.
      *
      * Sums PAID payments for the owner AND all Family Members whose
      * resident row has owner_resident_id = ownerResidentId.
+     *
+     * ALLOCATION-AWARE: a regular (single-month) Payment row credits its
+     * own payment_month directly, exactly as before. A multi-month admin
+     * "Record Payment" entry (is_multi_month = 1) instead keeps its own
+     * (payment_month, amount) as the UNDIVIDED total — used only by
+     * whole-society, billing-month-keyed reports (Financial Summary,
+     * Analytics, Payment Management stats) which intentionally still show
+     * the full amount in one bucket — and contributes to THIS query only
+     * through its payment_month_allocations child rows, each carrying its
+     * own month's share. This is what lets Maintenance Summary, Paid/Unpaid
+     * Details and Pending Dues (all powered by this one query) correctly
+     * mark each selected month as paid for its own amount, while every
+     * pre-existing single-month payment (no allocation rows) behaves
+     * identically to before — the second UNION branch simply contributes
+     * nothing for those.
      *
      * Written as native SQL (nativeQuery = true) because Hibernate 6
      * (Spring Boot 3.x) does NOT support SpEL #{T(...)} inside JPQL
@@ -72,13 +87,25 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * @param paymentMonth     e.g. "2025-06"
      */
     @Query(value =
-           "SELECT COALESCE(SUM(p.amount), 0) " +
-           "FROM payments p " +
-           "INNER JOIN residents r ON r.id = p.resident_id " +
-           "WHERE p.payment_status = 'PAID' " +
-           "AND   p.payment_month  = :paymentMonth " +
-           "AND  (p.resident_id = :ownerResidentId " +
-           "      OR r.owner_resident_id = :ownerResidentId)",
+           "SELECT COALESCE(SUM(amt), 0) FROM (" +
+           "  SELECT p.amount AS amt " +
+           "  FROM payments p " +
+           "  INNER JOIN residents r ON r.id = p.resident_id " +
+           "  WHERE p.payment_status = 'PAID' " +
+           "  AND   p.payment_month  = :paymentMonth " +
+           "  AND  (p.is_multi_month = 0 OR p.is_multi_month IS NULL) " +
+           "  AND  (p.resident_id = :ownerResidentId " +
+           "        OR r.owner_resident_id = :ownerResidentId) " +
+           "  UNION ALL " +
+           "  SELECT pma.amount AS amt " +
+           "  FROM payment_month_allocations pma " +
+           "  INNER JOIN payments p2 ON p2.id = pma.payment_id " +
+           "  INNER JOIN residents r2 ON r2.id = p2.resident_id " +
+           "  WHERE p2.payment_status = 'PAID' " +
+           "  AND   pma.payment_month = :paymentMonth " +
+           "  AND  (p2.resident_id = :ownerResidentId " +
+           "        OR r2.owner_resident_id = :ownerResidentId) " +
+           ") combined",
            nativeQuery = true)
     Double sumPaidAmountByPropertyAndPaymentMonth(
             @Param("ownerResidentId") Long ownerResidentId,

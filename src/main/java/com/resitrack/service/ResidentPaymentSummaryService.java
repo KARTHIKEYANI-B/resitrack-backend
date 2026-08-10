@@ -1,12 +1,14 @@
 package com.resitrack.service;
 
 import com.resitrack.entity.Payment;
+import com.resitrack.entity.PaymentMonthAllocation;
 import com.resitrack.entity.Resident;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.util.NaturalOrderComparator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -93,6 +95,7 @@ public class ResidentPaymentSummaryService {
      * @param fyStartYear the calendar year in which the financial year's
      *                    April falls (e.g. 2025 for FY Apr 2025 – Mar 2026)
      */
+    @Transactional(readOnly = true)
     public Map<String, Object> getResidentPaymentDetail(int fyStartYear) {
 
         // ── Same resident scope as Financial Summary's collection matrix ──
@@ -136,12 +139,33 @@ public class ResidentPaymentSummaryService {
         // paymentMonth are summed here via BigDecimal::add — this is the fix:
         // grouping by the stable billing month (not the collection date)
         // guarantees every installment of one bill lands in the same cell.
+        //
+        // Multi-month admin "Record Payment" entries (isMultiMonth=true)
+        // are stored as ONE Payment row for the undivided total (so
+        // Financial Summary / Payment Management / Receipts keep showing
+        // it unsplit) — here we instead expand each into its
+        // monthAllocations, crediting every selected month its own share,
+        // so this matrix still marks each month paid separately.
         Map<Long, Map<String, BigDecimal>> paymentMap = new HashMap<>();
         for (Payment p : allPayments) {
             if (p.getResident() == null) continue; // defensive — should never happen for a real payment row
+            Long resId = p.getResident().getId();
+
+            if (Boolean.TRUE.equals(p.getIsMultiMonth())
+                    && p.getMonthAllocations() != null && !p.getMonthAllocations().isEmpty()) {
+                for (PaymentMonthAllocation alloc : p.getMonthAllocations()) {
+                    String monthKey = alloc.getPaymentMonth();
+                    if (monthKey == null || !monthKeySet.contains(monthKey)) continue;
+                    paymentMap
+                        .computeIfAbsent(resId, k -> new LinkedHashMap<>())
+                        .merge(monthKey, alloc.getAmount() != null ? alloc.getAmount() : BigDecimal.ZERO,
+                               BigDecimal::add);
+                }
+                continue;
+            }
+
             String monthKey = p.getPaymentMonth();
             if (monthKey == null || !monthKeySet.contains(monthKey)) continue; // defensive bound check
-            Long resId = p.getResident().getId();
             paymentMap
                 .computeIfAbsent(resId, k -> new LinkedHashMap<>())
                 .merge(monthKey, p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO,

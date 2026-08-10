@@ -3,11 +3,12 @@ package com.resitrack.service;
 import com.resitrack.dto.AdminPaymentRequest;
 import com.resitrack.dto.PaymentRequest;
 import com.resitrack.dto.PaymentResponseDTO;
+import com.resitrack.dto.ResidentMaintenanceInfoDTO;
 import com.resitrack.dto.TransactionLedgerEntryDTO;
 import com.resitrack.entity.*;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.*;
-import com.resitrack.util.PhoneNormalizer;
+import com.resitrack.util.NaturalOrderComparator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -69,16 +70,8 @@ public class PaymentService {
         if (payment.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
             throw new CustomException("Payment is not pending verification", HttpStatus.BAD_REQUEST);
 
-        // A consolidated Pending Verification row shows the combined total for
-        // every month in the batch — approving it must approve every one of
-        // those sibling rows, not just this representative one, or the other
-        // months would silently stay stuck pending forever.
-        List<Payment> toApprove = batchSiblingsInSameStatus(payment);
-
-        for (Payment p : toApprove) {
-            if (p.getResident() != null && p.getPaymentMonth() != null) {
-                validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
-            }
+        if (p.getResident() != null && p.getPaymentMonth() != null) {
+            validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
         }
 
         LocalDate today = LocalDate.now();
@@ -312,6 +305,9 @@ public class PaymentService {
 
         return entries;
     }
+
+    /** One resolved (month, amount) allocation — see resolveAdminMonthAllocations(). */
+    private record MonthAmount(String month, BigDecimal amount) {}
 
     /**
      * Creates one Payment row per selected billing month that actually
@@ -556,6 +552,111 @@ public class PaymentService {
         return raw.stream()
                 .filter(m -> m != null && !m.isBlank())
                 .distinct()
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Validates the admin's selected billing months and allocates the
+     * single entered paidAmount across them oldest-month-first — the same
+     * settlement order the resident's own multi-month "Pay Maintenance"
+     * flow uses (PaymentVerificationService.buildValidatedMonthAllocations)
+     * — so a partial amount still lands correctly on the earliest unpaid
+     * month(s) rather than being split blindly across all of them.
+     *
+     * Validation is against the TOTAL remaining balance across every
+     * selected month (required × months − already paid for each), not any
+     * single month in isolation — this replaces the old per-month-only
+     * "Amount exceeds the remaining balance of X for this month" check,
+     * which no longer applies once more than one month can be selected.
+     *
+     * A month already fully covered by prior payments contributes zero and
+     * is simply skipped when creating rows — it never blocks the other
+     * selected months, mirroring how the resident-side flow treats an
+     * already-settled month within a multi-month selection.
+     */
+    private List<MonthAmount> resolveAdminMonthAllocations(
+            Resident resident, List<String> months, BigDecimal paidAmount) {
+
+        List<String> distinctMonths = months.stream()
+                .filter(m -> m != null && !m.isBlank())
+                .distinct().sorted().collect(Collectors.toList());
+
+        if (distinctMonths.isEmpty())
+            throw new CustomException("Select at least one billing month", HttpStatus.BAD_REQUEST);
+
+        for (String m : distinctMonths) {
+            if (!m.matches("\\d{4}-\\d{2}"))
+                throw new CustomException("Invalid billing month: " + m, HttpStatus.BAD_REQUEST);
+        }
+
+        BigDecimal required = maintenanceService.getRequiredMaintenanceAmountFor(resident);
+
+        if (required.compareTo(BigDecimal.ZERO) <= 0) {
+            // Nothing configured — nothing to gate, same fallback the
+            // previous single-month flow already relied on; the full
+            // entered amount is recorded against the earliest selected month.
+            return List.of(new MonthAmount(distinctMonths.get(0), paidAmount));
+        }
+
+        LinkedHashMap<String, BigDecimal> remainingByMonth = new LinkedHashMap<>();
+        BigDecimal totalRemaining = BigDecimal.ZERO;
+        for (String month : distinctMonths) {
+            Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(resident.getId(), month);
+            BigDecimal paidSoFar = paidRaw != null ? BigDecimal.valueOf(paidRaw) : BigDecimal.ZERO;
+            BigDecimal remaining = required.subtract(paidSoFar).max(BigDecimal.ZERO);
+            remainingByMonth.put(month, remaining);
+            totalRemaining = totalRemaining.add(remaining);
+        }
+
+        if (totalRemaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(
+                    "Maintenance for the selected month(s) has already been fully paid.", HttpStatus.BAD_REQUEST);
+        }
+
+        if (paidAmount.compareTo(totalRemaining) > 0) {
+            throw new CustomException(
+                    "Amount exceeds the total remaining balance of "
+                            + totalRemaining.setScale(2, java.math.RoundingMode.HALF_UP)
+                            + " for the selected month(s).", HttpStatus.BAD_REQUEST);
+        }
+
+        List<MonthAmount> allocations = new ArrayList<>();
+        BigDecimal amountLeft = paidAmount;
+        for (String month : distinctMonths) {
+            if (amountLeft.compareTo(BigDecimal.ZERO) <= 0) break;
+            BigDecimal remaining = remainingByMonth.get(month);
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) continue; // already fully paid — skip
+            BigDecimal allocate = amountLeft.min(remaining);
+            allocations.add(new MonthAmount(month, allocate));
+            amountLeft = amountLeft.subtract(allocate);
+        }
+        return allocations;
+    }
+
+    /**
+     * Backs GET /admin/payments/eligible-residents — powers the "Record
+     * Payment" form's searchable resident dropdown (search by owner name
+     * or flat/villa number) and, once a resident is selected, the Amount
+     * auto-calculation (monthlyMaintenanceAmount × selected months) — all
+     * from this one list, fetched once when the form opens, so selecting a
+     * resident never needs a separate round-trip. Read-only; scoped to
+     * active, approved OWNER residents — the same
+     * findAllActiveApprovedOwners() scope Financial Summary, Maintenance
+     * Summary and Paid/Unpaid Details already use.
+     */
+    @Transactional(readOnly = true)
+    public List<ResidentMaintenanceInfoDTO> getEligibleResidentsForPayment() {
+        return residentRepo.findAllActiveApprovedOwners().stream()
+                .sorted(Comparator.comparing(
+                        (Resident r) -> r.getFlatNumber() != null ? r.getFlatNumber() : "",
+                        NaturalOrderComparator.INSTANCE))
+                .map(r -> ResidentMaintenanceInfoDTO.builder()
+                        .residentId(r.getId())
+                        .ownerName(r.getFullName())
+                        .flatNumber(r.getFlatNumber())
+                        .phone(r.getPhone())
+                        .monthlyMaintenanceAmount(maintenanceService.getRequiredMaintenanceAmountFor(r))
+                        .build())
                 .collect(Collectors.toList());
     }
 

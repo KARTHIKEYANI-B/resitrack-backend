@@ -146,7 +146,7 @@ public class ReceiptService {
 
             // Letter page, matching the reference format's page size.
             Document doc = new Document(PageSize.LETTER, 50f, 50f, 40f, 40f);
-            PdfWriter.getInstance(doc, baos);
+            PdfWriter writer = PdfWriter.getInstance(doc, baos);
             doc.open();
 
             String orgName = r.getApartmentName() != null && !r.getApartmentName().isBlank()
@@ -156,13 +156,8 @@ public class ReceiptService {
             BigDecimal late  = r.getLateFeeAmount() != null ? r.getLateFeeAmount() : BigDecimal.ZERO;
             BigDecimal total = r.getTotalAmount()   != null ? r.getTotalAmount()   : paid.add(late);
 
-            // flatLabel is the precomputed "Flat 58" / "Villa 12" string
-            // (ReceiptResponseDTO.from()) — falls back to bare flatNumber
-            // only if a caller ever builds the DTO some other way. Shown
-            // once, in the header's top-right corner (addVoucherDocument),
-            // instead of repeating on every "Account :" line below.
-            String flatPart = r.getFlatLabel() != null ? r.getFlatLabel() : r.getFlatNumber();
-            String accountLabel = r.getResidentName() != null ? r.getResidentName() : "";
+            String accountLabel = ((r.getFlatNumber() != null ? r.getFlatNumber() : "") + " "
+                    + (r.getResidentName() != null ? r.getResidentName() : "")).trim();
             String dateStr = r.getPaymentDate() != null
                     ? r.getPaymentDate().format(DateTimeFormatter.ofPattern("d-MMM-yy")) : "—";
 
@@ -191,7 +186,12 @@ public class ReceiptService {
                     agstRef, total,
                     r.getPaymentMethod(), null,
                     NumberToWordsUtil.amountInWords(total), total,
-                    false, flatPart);
+                    false);
+
+            if (r.getFlatNumber() != null && !r.getFlatNumber().isBlank()) {
+                String propertyLabel = "VILLA".equals(r.getPropertyType()) ? "Villa" : "Flat";
+                drawCornerBadge(writer, doc, propertyLabel + " " + r.getFlatNumber());
+            }
 
             doc.close();
             return baos.toByteArray();
@@ -375,6 +375,38 @@ public class ReceiptService {
         auth.setHorizontalAlignment(Element.ALIGN_RIGHT);
         sigRow.addCell(auth);
         doc.add(sigRow);
+    }
+
+    /**
+     * Boxed "Flat 42" / "Villa 5" badge in the page's top-right corner —
+     * drawn on the direct-content layer at fixed page coordinates,
+     * entirely independent of the flowing Paragraph/PdfPTable content
+     * added by addVoucherDocument() above, so it can never overlap the
+     * centered org name/title or the No./Dated row. Receipt-only — the
+     * Payment Voucher (ExpenseService) never calls this, since expenses
+     * have no flat/villa.
+     */
+    private static void drawCornerBadge(PdfWriter writer, Document doc, String text) {
+        Font font = new Font(Font.TIMES_ROMAN, 9f, Font.BOLD, Color.BLACK);
+        Phrase phrase = new Phrase(text, font);
+
+        float pageWidth   = doc.getPageSize().getWidth();
+        float pageHeight  = doc.getPageSize().getHeight();
+        float rightMargin = 50f; // matches new Document(PageSize.LETTER, 50f, 50f, 40f, 40f) above
+        float boxWidth    = 80f;
+        float boxHeight   = 16f;
+        float x2 = pageWidth - rightMargin;
+        float x1 = x2 - boxWidth;
+        float yTop    = pageHeight - 15f; // inside the top margin band, clear of the org name below
+        float yBottom = yTop - boxHeight;
+
+        PdfContentByte cb = writer.getDirectContent();
+        cb.setLineWidth(0.75f);
+        cb.setColorStroke(Color.BLACK);
+        cb.rectangle(x1, yBottom, boxWidth, boxHeight);
+        cb.stroke();
+        ColumnText.showTextAligned(cb, Element.ALIGN_CENTER, phrase,
+                (x1 + x2) / 2f, yBottom + boxHeight / 2f - 3f, 0);
     }
 
     private static PdfPCell borderedCell(String text, Font font, int align, int border) {

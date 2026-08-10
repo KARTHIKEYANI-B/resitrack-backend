@@ -8,6 +8,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "payments")
@@ -72,6 +74,23 @@ public class Payment {
     @Builder.Default
     @Column(nullable = false)
     private Boolean adminCreated = false;
+
+    /**
+     * True only for an admin "Record Payment" entry covering more than one
+     * billing month. paymentMonth/amount above still hold the FIRST selected
+     * month and the FULL entered total (so every existing single-row report
+     * — Financial Summary, Payment Management, Receipts, Payment History —
+     * keeps showing the undivided amount unchanged); monthAllocations below
+     * carries the per-month breakdown used only by Maintenance Summary,
+     * Paid/Unpaid Details and Pending Dues.
+     */
+    @Builder.Default
+    @Column(name = "is_multi_month", nullable = false)
+    private Boolean isMultiMonth = false;
+
+    @Builder.Default
+    @OneToMany(mappedBy = "payment", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<PaymentMonthAllocation> monthAllocations = new ArrayList<>();
 
     @CreationTimestamp
     private LocalDateTime createdAt;
