@@ -17,7 +17,15 @@ public class AdminPaymentRequest {
 
     private LocalDate paymentDate;
 
+    // Kept for backward compatibility with any other caller of this DTO —
+    // PaymentService.resolvePaymentMonths() prefers paymentMonths (below)
+    // when present, falling back to this single-value field otherwise.
     private String paymentMonth;
+
+    // Multi-month selection: paidAmount is the TOTAL across every month in
+    // this list, allocated oldest-first across each month's own remaining
+    // balance (see PaymentService.registerAdminPayment/resolvePaymentMonths).
+    private List<String> paymentMonths;
 
     private Boolean verifiedByAdmin;
 

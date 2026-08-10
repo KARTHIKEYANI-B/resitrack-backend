@@ -36,9 +36,6 @@ public class DataInitializer implements CommandLineRunner {
     private final MemberService              memberService;
     private final PasswordEncoder            passwordEncoder;
 
-    // NOTE: These must stay in sync with the canonical position-email maps in
-    // AdminAssignmentService.POSITION_EMAILS and MemberService.resolvePositionEmail() —
-    // all three places encode the same "one email per committee position" mapping.
     private static final String SUPER_ADMIN_EMAIL    = "superadmin@gmail.com";
     private static final String SUPER_ADMIN_NAME     = "Super Admin";
     private static final String SUPER_ADMIN_PASSWORD = "Admin@123";
@@ -49,28 +46,6 @@ public class DataInitializer implements CommandLineRunner {
     private static final String TEST_SUPER_ADMIN_PASSWORD = "Admin@123";
     private static final String TEST_SUPER_ADMIN_PHONE    = "";
 
-    // System Owner — the top of the role hierarchy (Owner > Super Admin >
-    // Admin), seeded the same way as every other admin account here
-    // (hashed via passwordEncoder, never stored in plaintext). Its "email"
-    // is a plain identifier string, not a real email address — the login
-    // DTO/endpoints apply no @Email or format validation (see
-    // LoginRequest.java), so this logs in exactly like any other admin via
-    // the existing email/phone identifier field. It is a NORMAL row in the
-    // admins table: it appears in the admin list and every other admin
-    // query like any other admin — not hidden from admin-side tooling
-    // (Super Admins can still see and are aware of it), so it stays
-    // auditable. Only non-Super-Admin position admins have it filtered out
-    // of the accounts list (see AdminAccountController).
-    //
-    // Deliberately does NOT get superAdmin=true (see Admin.java's
-    // `systemOwner` field javadoc for why: it must stay independent of the
-    // committee-position-driven single-Super-Admin logic in
-    // AdminAssignmentService). Every Super-Admin-gated permission check
-    // across the app has been updated to also accept systemOwner==true, so
-    // this account still has every Super Admin capability plus the
-    // Owner-exclusive ones (see AdminAccountController).
-    // public: AdminAccountController reads this to exclude the account from
-    // the admin list for non-Owner, non-Super-Admin callers.
     public static final String OWNER_EMAIL     = "security@apmsys";
     private static final String OWNER_NAME     = "System Owner";
     private static final String OWNER_PASSWORD = "Security@apmsys123";
@@ -230,9 +205,6 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     private void initSystemOwner() {
-        // Stale-flag cleanup, same pattern as initSuperAdmin() above: strip
-        // systemOwner from anything not in the allow-list, so the flag can
-        // never end up on the wrong row.
         adminRepo.findAll().forEach(a -> {
             if (!OWNER_EMAILS.contains(a.getEmail()) && a.isSystemOwner()) {
                 a.setSystemOwner(false);
@@ -257,14 +229,7 @@ public class DataInitializer implements CommandLineRunner {
             Admin owner = adminRepo.findByEmail(OWNER_EMAIL).get();
             boolean dirty = false;
             if (!owner.isSystemOwner())          { owner.setSystemOwner(true);          dirty = true; }
-            // One-time rename from the pre-Owner-tier display name. Only
-            // touches it if it still exactly matches the old default —
-            // never overwrites a name someone has since customized.
             if ("Emergency Admin".equals(owner.getName())) { owner.setName(OWNER_NAME); dirty = true; }
-            // Migrates the pre-Owner-tier version of this account, which
-            // was seeded with superAdmin=true instead — see Admin.java's
-            // `systemOwner` field javadoc for why Owner must stay
-            // independent of superAdmin going forward.
             if (owner.isSuperAdmin())            { owner.setSuperAdmin(false);          dirty = true; }
             if (owner.isForcePasswordChange())   { owner.setForcePasswordChange(false); dirty = true; }
             if (dirty) adminRepo.save(owner);

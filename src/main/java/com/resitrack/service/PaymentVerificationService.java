@@ -557,7 +557,9 @@ public class PaymentVerificationService {
     }
 
     @Transactional
-    public PaymentVerificationRequestDTO verifyRequest(Long requestId) {
+    public PaymentVerificationRequestDTO verifyRequest(Long requestId, String callerEmail) {
+        Admin actingAdmin = adminRepo.findByEmail(callerEmail).orElse(null);
+
         PaymentVerificationRequest req = verificationRepo.findById(requestId)
                 .orElseThrow(() -> new CustomException("Request not found", HttpStatus.NOT_FOUND));
 
@@ -593,7 +595,7 @@ public class PaymentVerificationService {
         // ORIGINAL single-month flow — monthAllocations always empty)
         // falls straight through to the unchanged code below.
         if (req.getMonthAllocations() != null && !req.getMonthAllocations().isEmpty()) {
-            return verifyMultiMonthRequest(req, resident, method, storedMethod);
+            return verifyMultiMonthRequest(req, resident, method, storedMethod, actingAdmin);
         }
 
         // ── Task 2 — re-validate remaining balance at VERIFY time ──────────
@@ -643,7 +645,7 @@ public class PaymentVerificationService {
 
         Payment savedPayment = paymentRepo.save(payment);
 
-        generateReceipt(savedPayment);
+        generateReceipt(savedPayment, actingAdmin);
 
         req.setStatus(PaymentVerificationRequest.RequestStatus.VERIFIED);
         req.setPaymentId(savedPayment.getId());
@@ -685,7 +687,8 @@ public class PaymentVerificationService {
      * which MySQL's unique index permits any number of times).
      */
     private PaymentVerificationRequestDTO verifyMultiMonthRequest(
-            PaymentVerificationRequest req, Resident resident, String method, String storedMethod) {
+            PaymentVerificationRequest req, Resident resident, String method, String storedMethod,
+            Admin actingAdmin) {
 
         // Re-check every month BEFORE creating any Payment row (all-or-nothing).
         for (PaymentVerificationRequestMonth alloc : req.getMonthAllocations()) {
@@ -715,7 +718,7 @@ public class PaymentVerificationService {
                     .build();
 
             Payment savedPayment = paymentRepo.save(payment);
-            generateReceipt(savedPayment);
+            generateReceipt(savedPayment, actingAdmin);
 
             alloc.setPaymentId(savedPayment.getId());
             savedPayments.add(savedPayment);
@@ -869,7 +872,13 @@ public class PaymentVerificationService {
     }
 
 
-    private void generateReceipt(Payment payment) {
+    /**
+     * @param actingAdmin the admin who verified this payment — may be null;
+     *                     their signatureUrl (if set) is snapshotted onto
+     *                     the receipt permanently. See PaymentService's
+     *                     generateReceipt() for the same pattern.
+     */
+    private void generateReceipt(Payment payment, Admin actingAdmin) {
         if (receiptRepo.findByPaymentId(payment.getId()).isPresent()) return;
 
         String receiptNo = "REC-" + LocalDate.now().getYear()
@@ -894,6 +903,7 @@ public class PaymentVerificationService {
                 .transactionId(payment.getTransactionId())
                 .apartmentName("R R Dhurya Owners Welfare Association")
                 .receiptFooter("Thank you for your payment. This is a computer-generated receipt.")
+                .adminSignature(actingAdmin != null ? actingAdmin.getSignatureUrl() : null)
                 .build();
 
         receiptRepo.save(receipt);

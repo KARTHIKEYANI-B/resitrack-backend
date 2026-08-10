@@ -49,6 +49,11 @@ public class ReceiptResponseDTO {
     private String apartmentName;
     private String receiptFooter;
 
+    /** The signature URL snapshotted from the admin who processed this
+     *  receipt (see Receipt.adminSignature) — null for receipts generated
+     *  before this feature existed, or if that admin never set one. */
+    private String adminSignatureUrl;
+
     private LocalDateTime generatedAt;
 
     @Data
@@ -97,6 +102,7 @@ public class ReceiptResponseDTO {
                 .totalAmount(total)
                 .apartmentName(r.getApartmentName())
                 .receiptFooter(r.getReceiptFooter())
+                .adminSignatureUrl(r.getAdminSignature())
                 .generatedAt(r.getGeneratedAt())
                 .build();
     }

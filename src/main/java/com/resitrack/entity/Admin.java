@@ -85,6 +85,17 @@ public class Admin {
     @Column(name = "resident_id")
     private Long residentId;
 
+    // The admin's own uploaded signature/seal image, stamped on receipts
+    // they process (see ReceiptService — snapshotted onto Receipt.adminSignature
+    // at generation time, not read live from here on every view). Both null
+    // until the admin uploads one via AdminSignatureController; signaturePublicId
+    // is the Cloudinary asset id, kept so a re-upload can delete the old one.
+    @Column(name = "signature_url")
+    private String signatureUrl;
+
+    @Column(name = "signature_public_id")
+    private String signaturePublicId;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

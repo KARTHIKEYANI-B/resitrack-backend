@@ -63,17 +63,22 @@ public class PaymentService {
     }
 
     @Transactional
-    public PaymentResponseDTO approvePayment(Long paymentId) {
+    public PaymentResponseDTO approvePayment(Long paymentId, String callerEmail) {
         Payment payment = paymentRepo.findById(paymentId)
                 .orElseThrow(() -> new CustomException("Payment not found", HttpStatus.NOT_FOUND));
 
         if (payment.getPaymentStatus() != Payment.PaymentStatus.PENDING_VERIFICATION)
             throw new CustomException("Payment is not pending verification", HttpStatus.BAD_REQUEST);
 
-        if (p.getResident() != null && p.getPaymentMonth() != null) {
-            validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
+        List<Payment> toApprove = batchSiblingsInSameStatus(payment);
+
+        for (Payment p : toApprove) {
+            if (p.getResident() != null && p.getPaymentMonth() != null) {
+                validateRemainingBalanceAtApproval(p.getResident(), p.getPaymentMonth(), p.getAmount());
+            }
         }
 
+        Admin actingAdmin = adminRepo.findByEmail(callerEmail).orElse(null);
         LocalDate today = LocalDate.now();
         for (Payment p : toApprove) {
             p.setPaymentStatus(Payment.PaymentStatus.PAID);
@@ -81,7 +86,7 @@ public class PaymentService {
             p.setPaymentDate(today);
             paymentRepo.save(p);
 
-            generateReceipt(p);
+            generateReceipt(p, actingAdmin);
             notificationService.sendPaymentApprovedNotification(p);
         }
         return dedupeByBatch(toApprove).get(0);
@@ -334,9 +339,9 @@ public class PaymentService {
      * as a single-month admin payment already was.
      */
     @Transactional
-    public List<PaymentResponseDTO> registerAdminPayment(AdminPaymentRequest req) {
-        if (req.getOwnerPhone() == null || req.getOwnerPhone().isBlank())
-            throw new CustomException("Owner phone number is required", HttpStatus.BAD_REQUEST);
+    public List<PaymentResponseDTO> registerAdminPayment(AdminPaymentRequest req, String callerEmail) {
+        if (req.getResidentId() == null)
+            throw new CustomException("Resident selection is required", HttpStatus.BAD_REQUEST);
         if (req.getPaidAmount() == null || req.getPaidAmount().compareTo(BigDecimal.ZERO) <= 0)
             throw new CustomException("Payment amount must be greater than zero", HttpStatus.BAD_REQUEST);
 
@@ -353,7 +358,8 @@ public class PaymentService {
                 throw new CustomException("Invalid payment method. Use: UPI, BANK_TRANSFER, CASH", HttpStatus.BAD_REQUEST);
         }
 
-        Resident resident = resolveResidentForPayment(req.getOwnerPhone());
+        Resident resident = residentRepo.findById(req.getResidentId())
+                .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
 
         // Chronological order (paymentMonth is always "YYYY-MM", so plain
         // string sort is chronologically correct) — oldest dues get paid
@@ -392,6 +398,7 @@ public class PaymentService {
         // for a single selected month, so "part of a batch" is simply
         // "batchId has more than one PAID row" rather than a special case.
         String batchId = UUID.randomUUID().toString();
+        Admin actingAdmin = adminRepo.findByEmail(callerEmail).orElse(null);
 
         List<PaymentResponseDTO> results = new ArrayList<>();
         BigDecimal amountLeft = req.getPaidAmount();
@@ -433,7 +440,7 @@ public class PaymentService {
                     .paymentMethod(req.getPaymentMode())
                     .transactionId(txnId)
                     .paymentBatchId(batchId)
-                    .submittedResidentName(req.getOwnerName())
+                    .submittedResidentName(resident.getFullName())
                     .paymentStatus(verified ? Payment.PaymentStatus.PAID : Payment.PaymentStatus.PENDING_VERIFICATION)
                     .verificationStatus(verified ? Payment.VerificationStatus.VERIFIED : Payment.VerificationStatus.PENDING)
                     .paymentMonth(month)
@@ -445,7 +452,7 @@ public class PaymentService {
             paymentRepo.save(p);
 
             if (verified) {
-                generateReceipt(p);
+                generateReceipt(p, actingAdmin);
                 notificationService.sendPaymentApprovedNotification(p);
             } else {
                 notificationService.sendPaymentVerificationRequest(p);
@@ -796,7 +803,15 @@ public class PaymentService {
                         : "");
     }
 
-    private void generateReceipt(Payment payment) {
+    /**
+     * @param actingAdmin the admin who approved/recorded this payment — may
+     *                     be null (e.g. caller lookup failed); their
+     *                     signatureUrl (if they've set one) is snapshotted
+     *                     onto the receipt permanently, so it stays what it
+     *                     was at generation time even if that admin later
+     *                     changes their signature.
+     */
+    private void generateReceipt(Payment payment, Admin actingAdmin) {
         if (receiptRepo.findByPaymentId(payment.getId()).isPresent()) return;
 
         String receiptNo = "REC-" + LocalDate.now().getYear()
@@ -819,6 +834,7 @@ public class PaymentService {
                 .transactionId(payment.getTransactionId())
                 .apartmentName("R R Dhurya Owners Welfare Association")
                 .receiptFooter("Thank you for your payment.")
+                .adminSignature(actingAdmin != null ? actingAdmin.getSignatureUrl() : null)
                 .build();
 
         receiptRepo.save(receipt);

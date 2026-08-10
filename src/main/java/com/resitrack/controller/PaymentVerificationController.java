@@ -226,9 +226,9 @@ public class PaymentVerificationController {
     @PutMapping("/admin/payment-verification/{id}/verify")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentVerificationRequestDTO>> verify(
-            @PathVariable Long id) {
+            @PathVariable Long id, Authentication auth) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Payment verified successfully", verificationService.verifyRequest(id)));
+                "Payment verified successfully", verificationService.verifyRequest(id, auth.getName())));
     }
 
     @PutMapping("/admin/payment-verification/{id}/reject")

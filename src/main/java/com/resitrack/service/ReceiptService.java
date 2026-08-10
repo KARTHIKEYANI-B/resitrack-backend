@@ -2,6 +2,7 @@ package com.resitrack.service;
 
 import com.lowagie.text.*;
 import com.lowagie.text.Font;
+import com.lowagie.text.Image;
 import com.lowagie.text.Rectangle;
 import com.lowagie.text.pdf.*;
 import com.resitrack.dto.ReceiptResponseDTO;
@@ -12,6 +13,7 @@ import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ReceiptRepository;
 import com.resitrack.util.NumberToWordsUtil;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -26,6 +28,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ReceiptService {
@@ -180,13 +183,30 @@ public class ReceiptService {
                 lines = List.of(new VoucherLine(accountLabel, total, null, false));
             }
 
+            // The signature stamped here is whichever admin processed THIS
+            // receipt, snapshotted onto adminSignatureUrl at generation time
+            // (see PaymentService/PaymentVerificationService.generateReceipt())
+            // — not the currently logged-in viewer's own signature, so a
+            // resident and an admin see the exact same stamp on this receipt.
+            Image signatureImage = null;
+            if (r.getAdminSignatureUrl() != null && !r.getAdminSignatureUrl().isBlank()) {
+                try {
+                    signatureImage = Image.getInstance(new java.net.URL(r.getAdminSignatureUrl()));
+                    signatureImage.scaleToFit(70f, 70f);
+                } catch (Exception e) {
+                    log.warn("Failed to load receipt signature image from {}, skipping stamp: {}",
+                            r.getAdminSignatureUrl(), e.getMessage());
+                    signatureImage = null;
+                }
+            }
+
             addVoucherDocument(doc, orgName, "Receipt Voucher",
                     r.getReceiptNumber(), dateStr,
                     lines,
                     agstRef, total,
                     r.getPaymentMethod(), null,
                     NumberToWordsUtil.amountInWords(total), total,
-                    false);
+                    false, signatureImage);
 
             if (r.getFlatNumber() != null && !r.getFlatNumber().isBlank()) {
                 String propertyLabel = "VILLA".equals(r.getPropertyType()) ? "Villa" : "Flat";
@@ -222,11 +242,13 @@ public class ReceiptService {
                 showReceiverSignature, null);
     }
 
-    // flatLabel ("Flat 58" / "Villa 12") — Receipt Voucher only, shown once in
-    // the top-right corner of the header instead of repeating on every
-    // "Account :" line (see VoucherDocument.jsx for the matching on-screen
-    // rendering). Null/blank for the Payment Voucher (expenses, no
-    // resident), which keeps the original fully-centered header untouched.
+    /**
+     * Overload adding an optional signature/seal image, stamped above the
+     * "Authorised Signatory" caption. Only ReceiptService passes a non-null
+     * image; the original 13-arg overload above (used by ExpenseService's
+     * Payment Voucher) always passes null, so Payment Voucher output is
+     * completely unaffected.
+     */
     static void addVoucherDocument(Document doc, String orgName, String title,
                                     String voucherNo, String dateStr,
                                     List<VoucherLine> accountLines,
@@ -234,53 +256,22 @@ public class ReceiptService {
                                     String through, String onAccountOf,
                                     String amountWords, BigDecimal total,
                                     boolean showReceiverSignature,
-                                    String flatLabel) throws DocumentException {
+                                    Image signatureImage) throws DocumentException {
 
         Font orgFont    = new Font(Font.TIMES_ROMAN, 15f, Font.BOLD,   Color.BLACK);
         Font titleFont  = new Font(Font.TIMES_ROMAN, 13f, Font.BOLD,   Color.BLACK);
         Font normFont   = new Font(Font.TIMES_ROMAN, 11f, Font.NORMAL, Color.BLACK);
         Font totalFont  = new Font(Font.TIMES_ROMAN, 12f, Font.BOLD,   Color.BLACK);
-        Font flatFont   = new Font(Font.TIMES_ROMAN, 10f, Font.BOLD,   Color.BLACK);
 
-        if (flatLabel != null && !flatLabel.isBlank()) {
-            PdfPTable headerRow = new PdfPTable(2);
-            headerRow.setWidthPercentage(100f);
-            headerRow.setWidths(new float[]{80f, 20f});
+        Paragraph org = new Paragraph(orgName.toUpperCase(), orgFont);
+        org.setAlignment(Element.ALIGN_CENTER);
+        doc.add(org);
 
-            PdfPCell orgCell = new PdfPCell();
-            orgCell.setBorder(Rectangle.NO_BORDER);
-            orgCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
-            Paragraph org = new Paragraph(orgName.toUpperCase(), orgFont);
-            org.setAlignment(Element.ALIGN_CENTER);
-            orgCell.addElement(org);
-            Paragraph ttl = new Paragraph(title, titleFont);
-            ttl.setAlignment(Element.ALIGN_CENTER);
-            ttl.setSpacingBefore(2f);
-            orgCell.addElement(ttl);
-            headerRow.addCell(orgCell);
-
-            PdfPCell flatCell = new PdfPCell(new Phrase(flatLabel, flatFont));
-            flatCell.setBorder(Rectangle.BOX);
-            flatCell.setBorderColor(Color.BLACK);
-            flatCell.setBorderWidth(0.75f);
-            flatCell.setHorizontalAlignment(Element.ALIGN_CENTER);
-            flatCell.setVerticalAlignment(Element.ALIGN_TOP);
-            flatCell.setPadding(4f);
-            headerRow.addCell(flatCell);
-
-            headerRow.setSpacingAfter(10f);
-            doc.add(headerRow);
-        } else {
-            Paragraph org = new Paragraph(orgName.toUpperCase(), orgFont);
-            org.setAlignment(Element.ALIGN_CENTER);
-            doc.add(org);
-
-            Paragraph ttl = new Paragraph(title, titleFont);
-            ttl.setAlignment(Element.ALIGN_CENTER);
-            ttl.setSpacingBefore(2f);
-            ttl.setSpacingAfter(10f);
-            doc.add(ttl);
-        }
+        Paragraph ttl = new Paragraph(title, titleFont);
+        ttl.setAlignment(Element.ALIGN_CENTER);
+        ttl.setSpacingBefore(2f);
+        ttl.setSpacingAfter(10f);
+        doc.add(ttl);
 
         // No. / Dated row, boxed top+bottom
         PdfPTable noRow = new PdfPTable(2);
@@ -370,9 +361,24 @@ public class ReceiptService {
             blank.setBorder(Rectangle.NO_BORDER);
             sigRow.addCell(blank);
         }
-        PdfPCell auth = new PdfPCell(new Phrase("Authorised Signatory", normFont));
+        PdfPCell auth = new PdfPCell();
         auth.setBorder(Rectangle.NO_BORDER);
         auth.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        if (signatureImage != null) {
+            // A Phrase added via addElement() ignores the cell's alignment
+            // (that only applies in "simple" single-Phrase cells), so the
+            // seal — right-aligned via its own setAlignment — would float
+            // to the right while the plain-left "Authorised Signatory"
+            // text stayed put, landing the seal beside the caption instead
+            // of straight above it. Giving the caption its own Paragraph
+            // with matching ALIGN_RIGHT stacks both on the same right edge.
+            signatureImage.setAlignment(Element.ALIGN_RIGHT);
+            auth.addElement(signatureImage);
+        }
+        Paragraph authText = new Paragraph("Authorised Signatory", normFont);
+        authText.setAlignment(Element.ALIGN_RIGHT);
+        if (signatureImage != null) authText.setSpacingBefore(2f);
+        auth.addElement(authText);
         sigRow.addCell(auth);
         doc.add(sigRow);
     }

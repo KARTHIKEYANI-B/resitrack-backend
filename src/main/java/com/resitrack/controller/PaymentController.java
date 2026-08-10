@@ -41,8 +41,8 @@ public class PaymentController {
     @PostMapping("/admin/payments")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<List<PaymentResponseDTO>>> createAdminPayment(
-            @RequestBody AdminPaymentRequest req) {
-        List<PaymentResponseDTO> created = paymentService.registerAdminPayment(req);
+            @RequestBody AdminPaymentRequest req, Authentication auth) {
+        List<PaymentResponseDTO> created = paymentService.registerAdminPayment(req, auth.getName());
         boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
         String monthWord = created.size() == 1 ? "month" : "months";
         String message = verified
@@ -169,9 +169,10 @@ public class PaymentController {
 
     @PutMapping("/admin/payments/{id}/approve")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<PaymentResponseDTO>> approvePayment(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<PaymentResponseDTO>> approvePayment(
+            @PathVariable Long id, Authentication auth) {
         return ResponseEntity.ok(
-                ApiResponse.success("Payment approved", paymentService.approvePayment(id)));
+                ApiResponse.success("Payment approved", paymentService.approvePayment(id, auth.getName())));
     }
 
     @PutMapping("/admin/payments/{id}/reject")
