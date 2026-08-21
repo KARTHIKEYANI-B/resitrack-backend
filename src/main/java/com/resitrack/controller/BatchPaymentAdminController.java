@@ -3,6 +3,7 @@ package com.resitrack.controller;
 import com.resitrack.dto.ApiResponse;
 import com.resitrack.dto.PaidListEntryDTO;
 import com.resitrack.service.BatchPaymentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -18,7 +19,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class BatchPaymentAdminController {
 
+
     private final BatchPaymentService batchPaymentService;
+    private final ViewerGuard            viewerGuard;
 
     /** Requirement 7: "Paid List" — Resident Name, Flat/Villa Number, Paid Date, Paid By. */
     @GetMapping("/batch/{batchId}/paid-list")
@@ -41,13 +44,16 @@ public class BatchPaymentAdminController {
     @PutMapping("/{batchPaymentId}/verify")
     public ResponseEntity<ApiResponse<PaidListEntryDTO>> verify(
             @PathVariable Long batchPaymentId, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         PaidListEntryDTO result = batchPaymentService.verifyPayment(batchPaymentId, auth.getName());
         return ResponseEntity.ok(ApiResponse.success("Batch payment verified", result));
     }
 
     @PutMapping("/{batchPaymentId}/reject")
     public ResponseEntity<ApiResponse<PaidListEntryDTO>> reject(
-            @PathVariable Long batchPaymentId, @RequestBody(required = false) Map<String, String> body) {
+            @PathVariable Long batchPaymentId, @RequestBody(required = false) Map<String, String> body,
+            Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String reason = body != null ? body.get("reason") : null;
         PaidListEntryDTO result = batchPaymentService.rejectPayment(batchPaymentId, reason);
         return ResponseEntity.ok(ApiResponse.success("Batch payment rejected", result));
@@ -58,6 +64,7 @@ public class BatchPaymentAdminController {
             @PathVariable Long batchPaymentId,
             @RequestBody(required = false) Map<String, String> body,
             Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String method = body != null ? body.get("paymentMethod") : null;
         PaidListEntryDTO result = batchPaymentService.markPaidByAdmin(batchPaymentId, auth.getName(), method);
         return ResponseEntity.ok(ApiResponse.success("Marked as paid", result));

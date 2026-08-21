@@ -6,6 +6,7 @@ import com.resitrack.entity.Admin;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.MemberService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,7 @@ public class MemberController {
 
     private final MemberService   memberService;
     private final AdminRepository adminRepo;
+    private final ViewerGuard     viewerGuard;
 
     @GetMapping
     public ResponseEntity<ApiResponse<List<MemberDTO.Response>>> getAllMembers() {
@@ -35,6 +37,7 @@ public class MemberController {
     @PostMapping
     public ResponseEntity<ApiResponse<MemberDTO.Response>> createMember(
             @RequestBody MemberDTO.Request req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Member created successfully",
@@ -44,6 +47,7 @@ public class MemberController {
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<MemberDTO.Response>> updateMember(
             @PathVariable Long id, @RequestBody MemberDTO.Request req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         return ResponseEntity.ok(ApiResponse.success("Member updated successfully",
                 memberService.updateMember(id, req)));
@@ -52,6 +56,7 @@ public class MemberController {
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> removeMember(
             @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         memberService.removeMember(id);
         return ResponseEntity.ok(ApiResponse.success("Member removed successfully", null));
@@ -60,6 +65,7 @@ public class MemberController {
     @PostMapping("/transfer-presidency")
     public ResponseEntity<ApiResponse<MemberDTO.Response>> transferPresidency(
             @RequestBody MemberDTO.TransferPresidencyRequest req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         return ResponseEntity.ok(ApiResponse.success("Presidency transferred successfully",
                 memberService.transferPresidency(req)));

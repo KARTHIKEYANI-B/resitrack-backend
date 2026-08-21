@@ -67,6 +67,18 @@ public class Admin {
     // BEFORE this admin.systemOwner column has ever been used to legitimately
     // deactivate anyone, immediately after this column is first created on
     // any pre-existing database (including production).
+    // ── Viewer tier (read-only access, below regular Admin) ─────────────
+    // A Viewer can log in and access all SuperAdmin/SystemOwner-visible
+    // pages in read-only mode. Every write endpoint checks this flag and
+    // returns 403 FORBIDDEN. Viewers are created and managed by the
+    // System Owner or Super Admin via AdminAccountController.
+    // Deliberately a separate flag (not superAdmin=false + position=null)
+    // so existing regular admin accounts are never accidentally treated as
+    // viewers, and so the check isViewer() is unambiguous.
+    @Builder.Default
+    @Column(name = "is_viewer", nullable = false, columnDefinition = "TINYINT(1) NOT NULL DEFAULT 0")
+    private boolean viewer = false;
+
     @Builder.Default
     @Column(name = "is_active", nullable = false, columnDefinition = "TINYINT(1) NOT NULL DEFAULT 1")
     private boolean active = true;

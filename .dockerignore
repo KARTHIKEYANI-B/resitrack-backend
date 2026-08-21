@@ -2,3 +2,6 @@ target
 .git
 .idea
 *.iml
+.env
+*.log
+uploads

@@ -7,6 +7,7 @@ import com.resitrack.service.NotificationService;
 import com.resitrack.service.PaymentService;
 import com.resitrack.service.ResidentService;
 import com.resitrack.repository.AdminRepository;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -25,6 +26,7 @@ public class NotificationController {
     private final ComplaintService    complaintService;
     private final PaymentService      paymentService;
     private final AdminRepository     adminRepo;
+    private final ViewerGuard         viewerGuard;
 
     @GetMapping("/admin/notifications")
     @PreAuthorize("hasRole('ADMIN')")
@@ -55,19 +57,24 @@ public class NotificationController {
     @PostMapping("/admin/notifications")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Notification>> createNotif(
-            @RequestBody NotificationRequest req) {
+            @RequestBody NotificationRequest req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Sent", notifService.create(req)));
     }
 
     @PutMapping("/admin/notifications/{id}/read")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Notification>> markRead(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Notification>> markRead(
+            @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Marked read", notifService.markRead(id)));
     }
 
     @DeleteMapping("/admin/notifications/{id}")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Void>> deleteAdminNotif(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> deleteAdminNotif(
+            @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         notifService.delete(id);
         return ResponseEntity.ok(ApiResponse.success("Deleted", null));
     }
@@ -75,7 +82,8 @@ public class NotificationController {
     @PostMapping("/admin/notifications/{notifId}/approve-payment")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> approvePaymentFromNotif(
-            @PathVariable Long notifId) {
+            @PathVariable Long notifId, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         PaymentResponseDTO result = notifService.approvePaymentFromNotification(notifId);
         return ResponseEntity.ok(ApiResponse.success("Payment approved and verified", result));
     }
@@ -84,7 +92,9 @@ public class NotificationController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> rejectPaymentFromNotif(
             @PathVariable Long notifId,
-            @RequestBody(required = false) Map<String, String> body) {
+            @RequestBody(required = false) Map<String, String> body,
+            Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String reason = body != null ? body.getOrDefault("reason", null) : null;
         PaymentResponseDTO result = notifService.rejectPaymentFromNotification(notifId, reason);
         return ResponseEntity.ok(ApiResponse.success("Payment rejected", result));
@@ -92,7 +102,9 @@ public class NotificationController {
 
     @PostMapping("/admin/pending-dues/{residentId}/notify")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Void>> sendReminder(@PathVariable Long residentId) {
+    public ResponseEntity<ApiResponse<Void>> sendReminder(
+            @PathVariable Long residentId, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         notifService.sendDueReminder(residentId);
         return ResponseEntity.ok(ApiResponse.success("Reminder sent", null));
     }

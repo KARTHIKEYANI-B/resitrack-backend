@@ -421,6 +421,8 @@ public class AuthService {
         try { superAdminFlag = admin.isSuperAdmin(); } catch (Exception ignored) {}
         boolean systemOwnerFlag = false;
         try { systemOwnerFlag = admin.isSystemOwner(); } catch (Exception ignored) {}
+        boolean viewerFlag = false;
+        try { viewerFlag = admin.isViewer(); } catch (Exception ignored) {}
         return JwtResponse.builder()
                 .token(accessToken)
                 .accessToken(accessToken)
@@ -433,6 +435,7 @@ public class AuthService {
                         .role("ADMIN")
                         .superAdmin(superAdminFlag)
                         .systemOwner(systemOwnerFlag)
+                        .viewer(viewerFlag)
                         .build())
                 .build();
     }

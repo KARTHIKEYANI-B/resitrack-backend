@@ -6,9 +6,11 @@ import com.lowagie.text.Image;
 import com.lowagie.text.Rectangle;
 import com.lowagie.text.pdf.*;
 import com.resitrack.dto.ReceiptResponseDTO;
+import com.resitrack.entity.Admin;
 import com.resitrack.entity.Payment;
 import com.resitrack.entity.Receipt;
 import com.resitrack.exception.CustomException;
+import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ReceiptRepository;
 import com.resitrack.util.NumberToWordsUtil;
@@ -24,6 +26,7 @@ import java.math.RoundingMode;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -35,6 +38,7 @@ public class ReceiptService {
 
     private final ReceiptRepository receiptRepo;
     private final PaymentRepository paymentRepo;
+    private final AdminRepository   adminRepo;
 
     public List<ReceiptResponseDTO> getAllReceipts() {
         return toDedupedDTOs(receiptRepo.findAllByOrderByGeneratedAtDesc());
@@ -112,6 +116,27 @@ public class ReceiptService {
         dto.setBatchTotalAmount(batchTotal);
     }
 
+    /**
+     * The signature to stamp on this receipt's PDF: prefers the one frozen
+     * on the receipt itself at generation time (adminSignatureUrl — see
+     * PaymentService/PaymentVerificationService.generateReceipt()). Falls
+     * back to any admin or super admin account that currently has a
+     * signature set — preferring a Super Admin's — for receipts generated
+     * before that feature existed, or before the processing admin had
+     * uploaded one, so those receipts still show a seal instead of none at
+     * all. Returns null only if no admin anywhere has a signature set.
+     */
+    private String resolveDisplaySignatureUrl(ReceiptResponseDTO r) {
+        if (r.getAdminSignatureUrl() != null && !r.getAdminSignatureUrl().isBlank()) {
+            return r.getAdminSignatureUrl();
+        }
+        return adminRepo.findBySignatureUrlIsNotNull().stream()
+                .sorted(Comparator.comparing(Admin::isSuperAdmin).reversed())
+                .map(Admin::getSignatureUrl)
+                .findFirst()
+                .orElse(null);
+    }
+
     /** "2026-04" -> "Apr 2026", matching the frontend's monthDisplay() convention. */
     private static String monthLabel(String paymentMonth) {
         try {
@@ -185,17 +210,20 @@ public class ReceiptService {
 
             // The signature stamped here is whichever admin processed THIS
             // receipt, snapshotted onto adminSignatureUrl at generation time
-            // (see PaymentService/PaymentVerificationService.generateReceipt())
-            // — not the currently logged-in viewer's own signature, so a
-            // resident and an admin see the exact same stamp on this receipt.
+            // (see PaymentService/PaymentVerificationService.generateReceipt()).
+            // Receipts generated before that admin (or any admin) had
+            // uploaded a signature have no snapshot to show — resolveDisplaySignatureUrl()
+            // falls back to any admin/super admin's current signature so
+            // those older receipts aren't left with a blank seal forever.
+            String signatureUrl = resolveDisplaySignatureUrl(r);
             Image signatureImage = null;
-            if (r.getAdminSignatureUrl() != null && !r.getAdminSignatureUrl().isBlank()) {
+            if (signatureUrl != null && !signatureUrl.isBlank()) {
                 try {
-                    signatureImage = Image.getInstance(new java.net.URL(r.getAdminSignatureUrl()));
+                    signatureImage = Image.getInstance(new java.net.URL(signatureUrl));
                     signatureImage.scaleToFit(70f, 70f);
                 } catch (Exception e) {
                     log.warn("Failed to load receipt signature image from {}, skipping stamp: {}",
-                            r.getAdminSignatureUrl(), e.getMessage());
+                            signatureUrl, e.getMessage());
                     signatureImage = null;
                 }
             }

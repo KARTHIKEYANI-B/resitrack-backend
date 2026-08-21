@@ -8,6 +8,7 @@ import com.resitrack.entity.Resident;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.PaymentVerificationService;
 import com.resitrack.service.ResidentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -31,6 +32,7 @@ public class PaymentVerificationController {
     private final PaymentVerificationService verificationService;
     private final ResidentService            residentService;
     private final AdminRepository            adminRepo;
+    private final ViewerGuard               viewerGuard;
 
     @GetMapping("/user/payment-verification/active-admins")
     @PreAuthorize("hasRole('USER')")
@@ -227,6 +229,7 @@ public class PaymentVerificationController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentVerificationRequestDTO>> verify(
             @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success(
                 "Payment verified successfully", verificationService.verifyRequest(id, auth.getName())));
     }
@@ -235,7 +238,9 @@ public class PaymentVerificationController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentVerificationRequestDTO>> reject(
             @PathVariable Long id,
-            @RequestBody(required = false) Map<String, String> body) {
+            @RequestBody(required = false) Map<String, String> body,
+            Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String reason = body != null ? body.get("reason") : null;
         return ResponseEntity.ok(ApiResponse.success(
                 "Payment request rejected", verificationService.rejectRequest(id, reason)));

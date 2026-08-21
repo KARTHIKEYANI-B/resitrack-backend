@@ -99,7 +99,7 @@ public class ReportController {
         Font normalFont = new Font(Font.HELVETICA, 10, Font.NORMAL);
         Font subFont    = new Font(Font.HELVETICA, 9,  Font.ITALIC);
   
-        Paragraph title = new Paragraph("ResiTrack Financial Report", titleFont);
+        Paragraph title = new Paragraph("RR Dhurya Financial Report", titleFont);
         title.setAlignment(Element.ALIGN_CENTER);
         doc.add(title);
 

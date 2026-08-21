@@ -11,6 +11,7 @@ import com.resitrack.repository.AdminRepository;
 import com.resitrack.repository.NotificationRepository;
 import com.resitrack.repository.SecurityGuardRepository;
 import com.resitrack.service.SecurityGuardService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -29,6 +30,7 @@ public class SecurityController {
     private final SecurityGuardRepository guardRepo;
     private final AdminRepository         adminRepo;
     private final NotificationRepository  notifRepo;
+    private final ViewerGuard             viewerGuard;
 
     @GetMapping("/admin/security")
     @PreAuthorize("hasRole('ADMIN')")
@@ -48,6 +50,7 @@ public class SecurityController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<SecurityGuardDTO.Response>> createGuard(
             @RequestBody SecurityGuardDTO.Request req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         Admin admin = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.UNAUTHORIZED));
@@ -61,6 +64,7 @@ public class SecurityController {
     public ResponseEntity<ApiResponse<SecurityGuardDTO.Response>> updateGuard(
             @PathVariable Long id, @RequestBody SecurityGuardDTO.UpdateRequest req,
             Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         Admin admin = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.UNAUTHORIZED));
@@ -72,6 +76,7 @@ public class SecurityController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deleteGuard(
             @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         securityService.delete(id);
         return ResponseEntity.ok(ApiResponse.success("Security account deleted", null));
@@ -83,7 +88,7 @@ public class SecurityController {
             @PathVariable Long guardId,
             @RequestBody Map<String, String> body,
             Authentication auth) {
-
+        viewerGuard.rejectViewer(auth);
         SecurityGuard guard = guardRepo.findById(guardId)
                 .orElseThrow(() -> new CustomException(
                         "Security account not found", HttpStatus.NOT_FOUND));

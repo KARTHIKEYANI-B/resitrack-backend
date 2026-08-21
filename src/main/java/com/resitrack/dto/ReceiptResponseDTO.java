@@ -21,6 +21,14 @@ public class ReceiptResponseDTO {
     private String residentName;
     private String flatNumber;
     private String flatType;
+    // "FLAT" | "VILLA", frozen at receipt-creation time (Receipt.propertyType)
+    // — falls back to the resident's current propertyType for receipts
+    // generated before that column existed (see from() below).
+    private String propertyType;
+    // Precomputed "Flat 58" / "Villa 12" label, so every caller (PDF voucher,
+    // admin/owner/family-member on-screen receipt) shows the identical text
+    // instead of each formatting flatNumber + propertyType separately.
+    private String flatLabel;
     private String residentPhone;
 
     private Long    paymentId;
@@ -90,6 +98,8 @@ public class ReceiptResponseDTO {
                 .residentName(r.getResidentName())
                 .flatNumber(r.getFlatNumber())
                 .flatType(r.getResident() != null ? r.getResident().getFlatType() : null)
+                .propertyType(pt.name())
+                .flatLabel(flatLabel)
                 .residentPhone(r.getResidentPhone())
                 .paymentId(r.getPayment() != null ? r.getPayment().getId() : null)
                 .transactionId(r.getTransactionId())

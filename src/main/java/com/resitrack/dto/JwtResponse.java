@@ -39,6 +39,10 @@ public class JwtResponse {
 
         private boolean superAdmin;
 
+        // Viewer tier — read-only admin account. Frontend hides write controls;
+        // backend enforces the restriction on every write endpoint regardless.
+        private boolean viewer;
+
         // Admin "Owner" tier — deliberately NOT named `owner`/`isOwner` to
         // avoid colliding with the pre-existing, unrelated Resident concept
         // of the same name (residentRole == "OWNER" vs "FAMILY_MEMBER",

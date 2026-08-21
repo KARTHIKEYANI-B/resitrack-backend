@@ -106,6 +106,23 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
             @Param("titlePart") String titlePart,
             @Param("date") LocalDate date);
 
+    // ── Personal Management expiry reminders (Phase 3) ─────────────────────
+    // Duplicate-prevention key: user + related record + reminder checkpoint.
+    // No date component — a given (resident, record, reminderDays) checkpoint
+    // must fire at most once ever, not once per day.
+    @Query("SELECT COUNT(n) > 0 FROM Notification n " +
+           "WHERE n.targetResidentId = :residentId " +
+           "AND n.type = :type " +
+           "AND n.relatedRecordType = :relatedRecordType " +
+           "AND n.relatedRecordId = :relatedRecordId " +
+           "AND n.reminderDays = :reminderDays")
+    boolean existsExpiryReminder(
+            @Param("residentId") Long residentId,
+            @Param("type") Notification.NotificationType type,
+            @Param("relatedRecordType") String relatedRecordType,
+            @Param("relatedRecordId") Long relatedRecordId,
+            @Param("reminderDays") Integer reminderDays);
+
     // ── Security guard queries (NEW) ──────────────────────────────────────
 
     @Query("SELECT n FROM Notification n " +

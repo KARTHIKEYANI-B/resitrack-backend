@@ -5,6 +5,7 @@ import com.resitrack.entity.Admin;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.CloudinaryService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,7 +31,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AdminSignatureController {
 
+
     private final AdminRepository   adminRepo;
+    private final ViewerGuard            viewerGuard;
     private final CloudinaryService cloudinaryService;
 
     @GetMapping
@@ -44,6 +47,7 @@ public class AdminSignatureController {
     @PostMapping
     public ResponseEntity<ApiResponse<Map<String, String>>> uploadMySignature(
             @RequestParam("file") MultipartFile file, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         Admin admin = requireAdmin(auth);
 
         CloudinaryService.UploadResult result = cloudinaryService.upload(file, "resitrack/signatures");

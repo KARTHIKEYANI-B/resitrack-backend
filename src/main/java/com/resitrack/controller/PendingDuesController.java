@@ -9,6 +9,7 @@ import com.resitrack.repository.PaymentRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.service.MaintenanceService;
 import com.resitrack.service.ResidentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -30,6 +31,7 @@ public class PendingDuesController {
     private final MaintenanceRepository maintenanceRepo;
     private final MaintenanceService    maintenanceService;
     private final ResidentService       residentService;
+    private final ViewerGuard           viewerGuard;
 
     // ── Admin: all OWNER residents with outstanding dues ──────────────────
     @GetMapping("/admin/pending-dues")
@@ -169,7 +171,10 @@ public class PendingDuesController {
 
     @PostMapping("/admin/pending-dues/{id}/penalty")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> applyPenalty(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> applyPenalty(
+            @PathVariable Long id,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         Payment p = paymentRepo.findById(id)
                 .orElseThrow(() -> new RuntimeException("Payment not found: " + id));
 

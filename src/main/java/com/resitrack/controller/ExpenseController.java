@@ -4,12 +4,14 @@ import com.resitrack.dto.*;
 import com.resitrack.entity.Expense;
 import com.resitrack.entity.ExpenseCategoryEntity;
 import com.resitrack.service.ExpenseService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -24,6 +26,7 @@ import java.util.Map;
 public class ExpenseController {
 
     private final ExpenseService expenseService;
+    private final ViewerGuard    viewerGuard;
 
     @Value("${app.upload.dir:./uploads}")
     private String uploadDir;
@@ -40,7 +43,8 @@ public class ExpenseController {
 
     @PostMapping("/categories")
     public ResponseEntity<ApiResponse<ExpenseCategoryEntity>> createCategory(
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, String> body, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String name = body.getOrDefault("name", "").trim();
         return ResponseEntity.ok(
                 ApiResponse.success("Category created", expenseService.createCategory(name)));
@@ -48,14 +52,17 @@ public class ExpenseController {
 
     @PutMapping("/categories/{id}")
     public ResponseEntity<ApiResponse<ExpenseCategoryEntity>> updateCategory(
-            @PathVariable Long id, @RequestBody Map<String, String> body) {
+            @PathVariable Long id, @RequestBody Map<String, String> body, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String name = body.getOrDefault("name", "").trim();
         return ResponseEntity.ok(
                 ApiResponse.success("Category updated", expenseService.updateCategory(id, name)));
     }
 
     @DeleteMapping("/categories/{id}")
-    public ResponseEntity<ApiResponse<Void>> deleteCategory(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> deleteCategory(
+            @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         expenseService.deleteCategory(id);
         return ResponseEntity.ok(ApiResponse.success("Category deleted", null));
     }
@@ -67,18 +74,23 @@ public class ExpenseController {
     }
 
     @PostMapping
-    public ResponseEntity<ApiResponse<Expense>> create(@RequestBody ExpenseRequest req) {
+    public ResponseEntity<ApiResponse<Expense>> create(
+            @RequestBody ExpenseRequest req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Created", expenseService.create(req)));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<Expense>> update(
-            @PathVariable Long id, @RequestBody ExpenseRequest req) {
+            @PathVariable Long id, @RequestBody ExpenseRequest req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Updated", expenseService.update(id, req)));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> delete(
+            @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         expenseService.delete(id);
         return ResponseEntity.ok(ApiResponse.success("Deleted", null));
     }
@@ -86,7 +98,9 @@ public class ExpenseController {
     @PostMapping("/{id}/receipt")
     public ResponseEntity<ApiResponse<Expense>> uploadReceipt(
             @PathVariable Long id,
-            @RequestParam("file") MultipartFile file) throws IOException {
+            @RequestParam("file") MultipartFile file,
+            Authentication auth) throws IOException {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Uploaded",
                 expenseService.uploadReceipt(id, file, uploadDir)));
     }

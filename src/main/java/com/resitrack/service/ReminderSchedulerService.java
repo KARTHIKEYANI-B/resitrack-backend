@@ -1,17 +1,27 @@
 package com.resitrack.service;
 
+import com.resitrack.entity.InsuranceDetail;
+import com.resitrack.entity.LicenseDetail;
 import com.resitrack.entity.Notification;
+import com.resitrack.entity.PersonalDocument;
+import com.resitrack.entity.PersonalReminder;
 import com.resitrack.entity.Resident;
 import com.resitrack.entity.TaxCategory;
+import com.resitrack.repository.InsuranceDetailRepository;
+import com.resitrack.repository.LicenseDetailRepository;
 import com.resitrack.repository.NotificationRepository;
+import com.resitrack.repository.PersonalDocumentRepository;
+import com.resitrack.repository.PersonalReminderRepository;
 import com.resitrack.repository.ResidentRepository;
 import com.resitrack.repository.TaxCategoryRepository;
+import com.resitrack.util.ExpiryStatusUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Slf4j
@@ -19,9 +29,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ReminderSchedulerService {
 
-    private final ResidentRepository    residentRepo;
-    private final NotificationRepository notifRepo;
-    private final TaxCategoryRepository  taxCategoryRepo;
+    private final ResidentRepository         residentRepo;
+    private final NotificationRepository     notifRepo;
+    private final TaxCategoryRepository      taxCategoryRepo;
+    private final InsuranceDetailRepository  insuranceRepo;
+    private final LicenseDetailRepository    licenseRepo;
+    private final PersonalDocumentRepository documentRepo;
+    private final PersonalReminderRepository personalReminderRepo;
 
     @Scheduled(cron = "0 0 8 * * *")
     public void checkAndSendReminders() {
@@ -38,6 +52,113 @@ public class ReminderSchedulerService {
             }
             sendCustomTaxCategoryRemindersIfDue(r, today, targetDate);
         }
+
+        // ── Personal Management (Phase 3): Insurance / License / Document
+        // expiry reminders, plus manually-created personal reminders. Same
+        // single scheduled entry point — no second scheduler or notification
+        // system is created. Scoped to ANY resident role (owner or family
+        // member), since these records are personal, not tied to the
+        // flat/property the way the legacy reminders above are.
+        checkPersonalManagementExpiries(today);
+    }
+
+    // ── Personal Management expiry reminders (Phase 3) + manual reminders ──
+
+    private void checkPersonalManagementExpiries(LocalDate today) {
+        List<Resident> allResidents = residentRepo.findAllActiveApprovedResidents();
+
+        for (Resident r : allResidents) {
+            for (InsuranceDetail p : insuranceRepo.findByResidentIdAndActiveTrueOrderByCreatedAtDesc(r.getId())) {
+                if (ExpiryStatusUtil.isManualOverride(p.getStatus())) continue; // Cancelled/Suspended — no reminders
+                maybeSendExpiryReminder(r, today, p.getExpiryDate(), "INSURANCE", p.getId(),
+                        p.getInsuranceType() + " insurance policy (" + p.getPolicyNumber() + ")");
+            }
+
+            for (LicenseDetail l : licenseRepo.findByResidentIdAndActiveTrueOrderByCreatedAtDesc(r.getId())) {
+                if (ExpiryStatusUtil.isManualOverride(l.getStatus())) continue;
+                maybeSendExpiryReminder(r, today, l.getExpiryDate(), "LICENSE", l.getId(),
+                        l.getLicenseType() + " (" + l.getLicenseNumber() + ")");
+            }
+
+            for (PersonalDocument d : documentRepo.findByResidentIdAndActiveTrueOrderByCreatedAtDesc(r.getId())) {
+                if (ExpiryStatusUtil.isManualOverride(d.getStatus())) continue;
+                maybeSendExpiryReminder(r, today, d.getExpiryDate(), "DOCUMENT", d.getId(),
+                        "document '" + d.getDocumentName() + "'");
+            }
+
+            for (PersonalReminder pr : personalReminderRepo
+                    .findByResidentIdAndReminderDateAndActiveTrueAndCompletedFalse(r.getId(), today)) {
+                sendPersonalReminderIfDue(r, pr);
+            }
+        }
+    }
+
+    private void sendPersonalReminderIfDue(Resident r, PersonalReminder reminder) {
+        boolean alreadySent = notifRepo.existsExpiryReminder(
+                r.getId(), Notification.NotificationType.REMINDER,
+                "PERSONAL_REMINDER", reminder.getId(), 0);
+        if (alreadySent) return;
+
+        notifRepo.save(Notification.builder()
+                .title(reminder.getTitle())
+                .message("Reminder: " + reminder.getTitle()
+                        + (reminder.getNotes() != null && !reminder.getNotes().isBlank()
+                                ? " — " + reminder.getNotes() : ""))
+                .type(Notification.NotificationType.REMINDER)
+                .targetResidentId(r.getId())
+                .residentName(r.getFullName())
+                .flatNumber(r.getFlatNumber())
+                .recipientRole("USER")
+                .relatedRecordType("PERSONAL_REMINDER")
+                .relatedRecordId(reminder.getId())
+                .reminderDays(0)
+                .isRead(false)
+                .build());
+
+        log.info("Sent personal reminder to resident {} for reminder #{}", r.getId(), reminder.getId());
+    }
+
+    /**
+     * Fires at most once per (resident, record, checkpoint) — checkpoints are
+     * 30 / 15 / 7 days before expiry, plus 0 (on the expiry date itself).
+     */
+    private void maybeSendExpiryReminder(Resident r, LocalDate today, LocalDate expiryDate,
+                                          String relatedRecordType, Long relatedRecordId, String subject) {
+        if (expiryDate == null) return;
+        if (expiryDate.isBefore(today)) return; // already past the on-expiry checkpoint — nothing new to fire
+
+        long daysLeft = ChronoUnit.DAYS.between(today, expiryDate);
+        int checkpoint = -1;
+        for (int c : ExpiryStatusUtil.REMINDER_CHECKPOINTS) {
+            if (daysLeft == c) { checkpoint = c; break; }
+        }
+        if (checkpoint == -1) return; // not one of the 30/15/7/0 checkpoints today
+
+        boolean alreadySent = notifRepo.existsExpiryReminder(
+                r.getId(), Notification.NotificationType.EXPIRY_REMINDER,
+                relatedRecordType, relatedRecordId, checkpoint);
+        if (alreadySent) return;
+
+        String message = checkpoint == 0
+                ? "Dear " + r.getFullName() + ", your " + subject + " has expired."
+                : "Dear " + r.getFullName() + ", your " + subject + " will expire in " + checkpoint + " days.";
+
+        notifRepo.save(Notification.builder()
+                .title("Expiry Reminder")
+                .message(message)
+                .type(Notification.NotificationType.EXPIRY_REMINDER)
+                .targetResidentId(r.getId())
+                .residentName(r.getFullName())
+                .flatNumber(r.getFlatNumber())
+                .recipientRole("USER")
+                .relatedRecordType(relatedRecordType)
+                .relatedRecordId(relatedRecordId)
+                .reminderDays(checkpoint)
+                .isRead(false)
+                .build());
+
+        log.info("Sent expiry reminder ({} days) to resident {} for {} #{}",
+                checkpoint, r.getId(), relatedRecordType, relatedRecordId);
     }
 
     private void sendInsuranceReminderIfDue(Resident r, LocalDate targetDate) {

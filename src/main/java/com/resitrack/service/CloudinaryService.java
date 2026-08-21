@@ -76,7 +76,14 @@ public class CloudinaryService {
             log.info("Uploaded file to Cloudinary: folder={}, publicId={}", folder, returnedPublicId);
             return new UploadResult(secureUrl, returnedPublicId);
 
-        } catch (IOException e) {
+        } catch (CustomException e) {
+            throw e;
+        } catch (Exception e) {
+            // Catches more than IOException deliberately — the Cloudinary SDK's
+            // bundled (old) Apache HttpClient can also throw unchecked exceptions
+            // (e.g. a stale pooled connection being reused, timeouts), and any of
+            // those should surface as a clean, expected upload failure rather than
+            // an unhandled 500.
             log.error("Cloudinary upload failed for folder={}", folder, e);
             throw new CustomException("Failed to upload file to cloud storage", HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -90,9 +97,14 @@ public class CloudinaryService {
         if (publicId == null || publicId.isBlank()) return;
         try {
             cloudinary.uploader().destroy(publicId, ObjectUtils.asMap("resource_type", "auto"));
-        } catch (IOException e) {
+        } catch (Exception e) {
             // Non-fatal — log and move on. An orphaned Cloudinary asset is not worth
-            // failing the caller's transaction over.
+            // failing the caller's transaction over. Catches more than IOException
+            // deliberately: the Cloudinary SDK can also throw unchecked exceptions
+            // (e.g. on an unexpected API error response), and a failed best-effort
+            // cleanup of the OLD asset must never fail the caller's actual request
+            // (e.g. AdminSignatureController's re-upload, which has already saved
+            // the new signature by the time this runs).
             log.warn("Failed to delete Cloudinary asset publicId={}", publicId, e);
         }
     }

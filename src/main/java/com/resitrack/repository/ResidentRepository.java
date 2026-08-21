@@ -136,6 +136,19 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
      * COALESCE treats null familyMembers as 0 so owners who skipped the field
      * do not break the aggregate.
      */
+    /**
+     * Active, approved, non-deleted residents of ANY role (owner + family
+     * member) — used by the Personal Management expiry-reminder scheduler,
+     * since insurance/license/documents belong to the individual login, not
+     * the flat owner. Unlike {@link #findAllActiveNonDeleted()} above, this
+     * is not restricted to OWNER.
+     */
+    @Query("SELECT r FROM Resident r " +
+           "WHERE r.isApproved = true " +
+           "AND r.status = 'ACTIVE' " +
+           "AND r.password <> '__DELETED__'")
+    List<Resident> findAllActiveApprovedResidents();
+
     @Query("SELECT COALESCE(SUM(r.familyMembers), 0) FROM Resident r " +
            "WHERE r.residentRole = 'OWNER' " +
            "AND r.status = 'ACTIVE' " +

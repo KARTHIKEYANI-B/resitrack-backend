@@ -3,6 +3,7 @@ package com.resitrack.controller;
 import com.resitrack.dto.*;
 import com.resitrack.entity.Maintenance;
 import com.resitrack.service.MaintenanceService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -17,7 +18,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MaintenanceController {
 
+
     private final MaintenanceService maintenanceService;
+    private final ViewerGuard            viewerGuard;
 
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','USER')")
@@ -27,20 +30,28 @@ public class MaintenanceController {
 
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Maintenance>> create(@RequestBody MaintenanceRequest req) {
+    public ResponseEntity<ApiResponse<Maintenance>> create(
+            @RequestBody MaintenanceRequest req,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Created", maintenanceService.create(req)));
     }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Maintenance>> update(
-            @PathVariable Long id, @RequestBody MaintenanceRequest req) {
+            @PathVariable Long id, @RequestBody MaintenanceRequest req,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Updated", maintenanceService.update(id, req)));
     }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> delete(
+            @PathVariable Long id,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         maintenanceService.delete(id);
         return ResponseEntity.ok(ApiResponse.success("Deleted", null));
     }
@@ -70,14 +81,18 @@ public class MaintenanceController {
     @PostMapping("/batch")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> createBatch(
-            @RequestBody MaintenanceBatchRequest req) {
+            @RequestBody MaintenanceBatchRequest req,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Batch created", maintenanceService.createBatch(req)));
     }
 
     @PutMapping("/batches/{id}/status")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Object>> updateBatchStatus(
-            @PathVariable Long id, @RequestBody Map<String, String> body) {
+            @PathVariable Long id, @RequestBody Map<String, String> body,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String status = body.get("status");
         return ResponseEntity.ok(ApiResponse.success("Status updated",
                 maintenanceService.updateBatchStatus(id, status)));
@@ -85,7 +100,9 @@ public class MaintenanceController {
 
     @DeleteMapping("/batches/{id}")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Void>> deleteBatch(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> deleteBatch(@PathVariable Long id,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         maintenanceService.deleteBatch(id);
         return ResponseEntity.ok(ApiResponse.success("Batch deleted", null));
     }

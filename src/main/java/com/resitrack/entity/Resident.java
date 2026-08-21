@@ -134,6 +134,82 @@ public class Resident {
     @Column(name = "taxes_insurance_due_date")
     private LocalDate taxesInsuranceDueDate;
 
+    // ── Personal Management: Basic Info ────────────────────────────────
+    @Column(length = 20)
+    private String gender;
+
+    @Column(name = "date_of_birth")
+    private LocalDate dateOfBirth;
+
+    @Column(name = "blood_group", length = 10)
+    private String bloodGroup;
+
+    @Column(length = 100)
+    private String nationality;
+
+    @Column(name = "marital_status", length = 20)
+    private String maritalStatus;
+
+    @Column(length = 150)
+    private String occupation;
+
+    @Column(length = 200)
+    private String qualification;
+
+    // ── Personal Management: Identification ──────────────────────────────
+    @Column(name = "aadhaar_number", length = 20)
+    private String aadhaarNumber;
+
+    // ── Personal Management: Contact Info (additive to phone/email above) ──
+    @Column(name = "alternate_phone", length = 20)
+    private String alternatePhone;
+
+    @Column(name = "whatsapp_number", length = 20)
+    private String whatsappNumber;
+
+    // ── Personal Management: Structured Address ─────────────────────────
+    // Additive — the legacy free-text `address` field above is untouched
+    // and still used by registration/admin views.
+    @Column(name = "house_number", length = 100)
+    private String houseNumber;
+
+    @Column(name = "building_block", length = 150)
+    private String buildingBlock;
+
+    @Column(length = 200)
+    private String street;
+
+    @Column(length = 150)
+    private String area;
+
+    @Column(length = 100)
+    private String city;
+
+    @Column(length = 100)
+    private String state;
+
+    @Column(length = 100)
+    private String country;
+
+    @Column(length = 10)
+    private String pincode;
+
+    // ── Personal Management: Emergency Contact ───────────────────────────
+    @Column(name = "emergency_contact_name", length = 150)
+    private String emergencyContactName;
+
+    @Column(name = "emergency_contact_relationship", length = 100)
+    private String emergencyContactRelationship;
+
+    @Column(name = "emergency_contact_phone", length = 20)
+    private String emergencyContactPhone;
+
+    @Column(name = "emergency_contact_alternate_phone", length = 20)
+    private String emergencyContactAlternatePhone;
+
+    @Column(name = "emergency_contact_address", length = 500)
+    private String emergencyContactAddress;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

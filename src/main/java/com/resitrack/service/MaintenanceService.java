@@ -301,8 +301,19 @@ public class MaintenanceService {
                 .stream().sorted(Comparator.comparing(Resident::getFlatNumber, NaturalOrderComparator.INSTANCE))
                 .collect(Collectors.toList());
 
-        List<MaintenanceOwnerDTO> flatDTOs  = buildOwnerDTOs(flatOwners,  activeFlatMaint.orElse(null),  paymentMonth);
-        List<MaintenanceOwnerDTO> villaDTOs = buildOwnerDTOs(villaOwners, activeVillaMaint.orElse(null), paymentMonth);
+        // ── Fetch every owner's paid-this-month amount in ONE query instead
+        // of one query per owner (see sumPaidAmountGroupedByOwnerForPaymentMonth
+        // javadoc) — this is what previously made the Admin Dashboard slow
+        // to load as the resident count grew.
+        Map<Long, BigDecimal> paidByOwner = paymentRepo
+                .sumPaidAmountGroupedByOwnerForPaymentMonth(paymentMonth)
+                .stream()
+                .collect(Collectors.toMap(
+                        row -> ((Number) row[0]).longValue(),
+                        row -> BigDecimal.valueOf(((Number) row[1]).doubleValue())));
+
+        List<MaintenanceOwnerDTO> flatDTOs  = buildOwnerDTOs(flatOwners,  activeFlatMaint.orElse(null),  paymentMonth, paidByOwner);
+        List<MaintenanceOwnerDTO> villaDTOs = buildOwnerDTOs(villaOwners, activeVillaMaint.orElse(null), paymentMonth, paidByOwner);
 
         BigDecimal totalFlat  = flatDTOs.stream()
                 .map(MaintenanceOwnerDTO::getMaintenanceAmount)
@@ -386,7 +397,8 @@ public class MaintenanceService {
      * any other heuristic to determine payment status.
      */
     private List<MaintenanceOwnerDTO> buildOwnerDTOs(
-            List<Resident> owners, Maintenance maint, String paymentMonth) {
+            List<Resident> owners, Maintenance maint, String paymentMonth,
+            Map<Long, BigDecimal> paidByOwner) {
 
         return owners.stream().map(r -> {
             BigDecimal calcAmount = maint != null
@@ -394,11 +406,11 @@ public class MaintenanceService {
                     : BigDecimal.ZERO;
 
             // ── Property-level paid sum: owner + ALL linked FM payments ───
-            Double paidRaw = paymentRepo.sumPaidAmountByPropertyAndPaymentMonth(
-                    r.getId(), paymentMonth);
-            BigDecimal paidAmount = paidRaw != null
-                    ? BigDecimal.valueOf(paidRaw).setScale(2, RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
+            // Looked up from the batched map (one query total for every
+            // owner) instead of a per-owner query — see call site.
+            BigDecimal paidAmount = paidByOwner
+                    .getOrDefault(r.getId(), BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
 
             // ── Pending = max(0, maintenance - paid) ─────────────────────
             BigDecimal pending = calcAmount.subtract(paidAmount).max(BigDecimal.ZERO);

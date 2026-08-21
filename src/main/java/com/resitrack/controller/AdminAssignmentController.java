@@ -6,6 +6,7 @@ import com.resitrack.entity.Admin;
 import com.resitrack.exception.CustomException;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.AdminAssignmentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,7 @@ public class AdminAssignmentController {
 
     private final AdminAssignmentService assignmentService;
     private final AdminRepository        adminRepo;
+    private final ViewerGuard            viewerGuard;
 
     @GetMapping
     public ResponseEntity<ApiResponse<List<AdminAssignmentDTO.Response>>> getActiveAssignments() {
@@ -43,6 +45,7 @@ public class AdminAssignmentController {
     public ResponseEntity<ApiResponse<AdminAssignmentDTO.AppointResponse>> appoint(
             @RequestBody AdminAssignmentDTO.AppointRequest req,
             Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         AdminAssignmentDTO.AppointResponse result = assignmentService.appoint(req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -53,6 +56,7 @@ public class AdminAssignmentController {
     public ResponseEntity<ApiResponse<AdminAssignmentDTO.Response>> revoke(
             @RequestBody AdminAssignmentDTO.RevokeRequest req,
             Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         requireSuperAdmin(auth);
         return ResponseEntity.ok(ApiResponse.success("Assignment revoked",
                 assignmentService.revoke(req)));

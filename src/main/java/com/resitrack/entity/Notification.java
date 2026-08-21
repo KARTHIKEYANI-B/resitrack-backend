@@ -45,6 +45,19 @@ public class Notification {
     @Column(nullable = false)
     private String recipientRole;
 
+    // ── Personal Management expiry reminders (Phase 3) ─────────────────────
+    // Nullable/additive — only populated for type = EXPIRY_REMINDER. These
+    // three together form the duplicate-prevention key described in the
+    // Phase 3 spec (user is targetResidentId, already present above).
+    @Column(name = "related_record_type", length = 20)
+    private String relatedRecordType;   // INSURANCE | LICENSE | DOCUMENT
+
+    @Column(name = "related_record_id")
+    private Long relatedRecordId;
+
+    @Column(name = "reminder_days")
+    private Integer reminderDays;       // 30 | 15 | 7 | 0 (0 = on-expiry)
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
@@ -67,6 +80,7 @@ public class Notification {
         PAYMENT,
         REMINDER,
         INSURANCE_REMINDER,
-        TAXES_REMINDER
+        TAXES_REMINDER,
+        EXPIRY_REMINDER
     }
 }

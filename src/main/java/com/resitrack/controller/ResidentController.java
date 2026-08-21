@@ -4,6 +4,7 @@ import com.resitrack.dto.*;
 import com.resitrack.repository.FamilyMemberRepository;
 import com.resitrack.service.PopulationService;
 import com.resitrack.service.ResidentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -19,6 +20,7 @@ import java.util.Map;
 public class ResidentController {
 
     private final ResidentService        residentService;
+    private final ViewerGuard            viewerGuard;
     private final PopulationService      populationService;
     private final FamilyMemberRepository familyMemberRepo;
 
@@ -74,12 +76,17 @@ public class ResidentController {
 
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<ResidentDTO>> updateResident(
-            @PathVariable Long id, @RequestBody ResidentDTO dto) {
+            @PathVariable Long id, @RequestBody ResidentDTO dto,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(ApiResponse.success("Updated", residentService.updateResident(id, dto)));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<ApiResponse<Void>> deleteResident(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> deleteResident(
+            @PathVariable Long id,
+            org.springframework.security.core.Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         residentService.deleteResident(id);
         return ResponseEntity.ok(ApiResponse.success("Deleted", null));
     }

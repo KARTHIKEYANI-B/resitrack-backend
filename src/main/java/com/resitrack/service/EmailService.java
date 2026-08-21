@@ -3,7 +3,7 @@ package com.resitrack.service;
 public interface EmailService {
 
     /**
-     * Sends the fixed "ResiTrack SMTP Test" email to {@code toEmail} using
+     * Sends the fixed "RR Dhurya SMTP Test" email to {@code toEmail} using
      * {@code app.mail.from} (MAIL_FROM) as the sender.
      *
      * @param toEmail recipient address (already validated by the controller)

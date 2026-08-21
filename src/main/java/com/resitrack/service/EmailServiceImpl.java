@@ -31,14 +31,14 @@ public class EmailServiceImpl implements EmailService {
     @Value("${app.mail.from}")
     private String mailFrom;
 
-    private static final String TEST_SUBJECT = "ResiTrack SMTP Test";
+    private static final String TEST_SUBJECT = "RR Dhurya SMTP Test";
 
     private static final String TEST_BODY =
             "Hello,\n\n" +
-            "This is a test email sent from ResiTrack using Brevo SMTP.\n" +
+            "This is a test email sent from RR Dhurya using Brevo SMTP.\n" +
             "If you received this email, the SMTP integration is working successfully.\n\n" +
             "Regards,\n" +
-            "ResiTrack Team";
+            "RR Dhurya Team";
 
     @Override
     public void sendTestEmail(String toEmail) {

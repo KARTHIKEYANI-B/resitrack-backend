@@ -2,6 +2,8 @@ package com.resitrack.service;
 
 import com.resitrack.dto.ResidentDTO;
 import com.resitrack.dto.FamilyMemberSummaryDTO;
+import com.resitrack.dto.PersonalDetailsDTO;
+import com.resitrack.dto.PersonalDetailsUpdateRequest;
 import com.resitrack.dto.VehicleDTO;
 import com.resitrack.entity.PropertyType;
 import com.resitrack.entity.Resident;
@@ -62,8 +64,12 @@ public class ResidentService {
         if (dto.getPhone()          != null) r.setPhone(PhoneNormalizer.normalize(dto.getPhone()));
         if (dto.getSquareFeet()     != null) r.setSqFt(dto.getSquareFeet());
         if (dto.getEmail()          != null) {
-            r.setAdminEmail(dto.getEmail());
-            if (!r.isRegistered()) r.setEmail(null);
+            // Update both columns so the change is visible regardless of
+            // whether toDTO() resolves via email or adminEmail.
+            // email is the authoritative login/display column; adminEmail is
+            // kept in sync as the admin-recorded value.
+            r.setEmail(dto.getEmail().trim().isEmpty() ? null : dto.getEmail().trim());
+            r.setAdminEmail(dto.getEmail().trim().isEmpty() ? null : dto.getEmail().trim());
         }
         if (dto.getFlatNumber()     != null) r.setFlatNumber(dto.getFlatNumber());
         if (dto.getFamilyMembers()  != null) r.setFamilyMembers(dto.getFamilyMembers());
@@ -110,6 +116,90 @@ public class ResidentService {
         r.setTaxesInsuranceDueDate(dto.getTaxesInsuranceDueDate());
 
         return toDTO(residentRepo.save(r));
+    }
+
+    // ── Personal Management (self-service: view/edit own personal info) ────
+
+    public PersonalDetailsDTO toPersonalDetailsDTO(Resident r) {
+        return PersonalDetailsDTO.builder()
+                .profilePhotoUrl(photoUploadService.toPublicUrl(r.getProfilePhoto()))
+                .fullName(r.getFullName())
+                .gender(r.getGender())
+                .dateOfBirth(r.getDateOfBirth())
+                .bloodGroup(r.getBloodGroup())
+                .nationality(r.getNationality())
+                .maritalStatus(r.getMaritalStatus())
+                .occupation(r.getOccupation())
+                .qualification(r.getQualification())
+                .aadhaarNumber(r.getAadhaarNumber())
+                .phone(r.getPhone())
+                .alternatePhone(r.getAlternatePhone())
+                .email(r.getEmail() != null ? r.getEmail() : r.getAdminEmail())
+                .whatsappNumber(r.getWhatsappNumber())
+                .houseNumber(r.getHouseNumber())
+                .buildingBlock(r.getBuildingBlock())
+                .street(r.getStreet())
+                .area(r.getArea())
+                .city(r.getCity())
+                .state(r.getState())
+                .country(r.getCountry())
+                .pincode(r.getPincode())
+                .emergencyContactName(r.getEmergencyContactName())
+                .emergencyContactRelationship(r.getEmergencyContactRelationship())
+                .emergencyContactPhone(r.getEmergencyContactPhone())
+                .emergencyContactAlternatePhone(r.getEmergencyContactAlternatePhone())
+                .emergencyContactAddress(r.getEmergencyContactAddress())
+                .build();
+    }
+
+    /**
+     * Updates the caller's own personal-management fields. {@code residentId}
+     * must always be resolved server-side from the authenticated principal
+     * (see PersonalDetailsController) — never accepted from the client.
+     */
+    @Transactional
+    public PersonalDetailsDTO updatePersonalDetails(Long residentId, PersonalDetailsUpdateRequest dto) {
+        Resident r = residentRepo.findById(residentId)
+                .orElseThrow(() -> new CustomException("Resident not found", HttpStatus.NOT_FOUND));
+
+        String normalizedPhone = PhoneNormalizer.normalize(dto.getPhone());
+        if (normalizedPhone != null
+                && !normalizedPhone.equals(r.getPhone())
+                && residentRepo.existsByPhone(normalizedPhone)) {
+            throw new CustomException("Phone number is already registered.", HttpStatus.CONFLICT);
+        }
+
+        r.setFullName(dto.getFullName().trim());
+        r.setPhone(normalizedPhone);
+        r.setAlternatePhone(PhoneNormalizer.normalize(dto.getAlternatePhone()));
+        r.setWhatsappNumber(PhoneNormalizer.normalize(dto.getWhatsappNumber()));
+        r.setGender(blankToNull(dto.getGender()));
+        r.setDateOfBirth(dto.getDateOfBirth());
+        r.setBloodGroup(blankToNull(dto.getBloodGroup()));
+        r.setNationality(blankToNull(dto.getNationality()));
+        r.setMaritalStatus(blankToNull(dto.getMaritalStatus()));
+        r.setOccupation(blankToNull(dto.getOccupation()));
+        r.setQualification(blankToNull(dto.getQualification()));
+        r.setAadhaarNumber(blankToNull(dto.getAadhaarNumber()));
+        r.setHouseNumber(blankToNull(dto.getHouseNumber()));
+        r.setBuildingBlock(blankToNull(dto.getBuildingBlock()));
+        r.setStreet(blankToNull(dto.getStreet()));
+        r.setArea(blankToNull(dto.getArea()));
+        r.setCity(blankToNull(dto.getCity()));
+        r.setState(blankToNull(dto.getState()));
+        r.setCountry(blankToNull(dto.getCountry()));
+        r.setPincode(blankToNull(dto.getPincode()));
+        r.setEmergencyContactName(blankToNull(dto.getEmergencyContactName()));
+        r.setEmergencyContactRelationship(blankToNull(dto.getEmergencyContactRelationship()));
+        r.setEmergencyContactPhone(PhoneNormalizer.normalize(dto.getEmergencyContactPhone()));
+        r.setEmergencyContactAlternatePhone(PhoneNormalizer.normalize(dto.getEmergencyContactAlternatePhone()));
+        r.setEmergencyContactAddress(blankToNull(dto.getEmergencyContactAddress()));
+
+        return toPersonalDetailsDTO(residentRepo.save(r));
+    }
+
+    private String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     // ── Profile photo management ──────────────────────────────────────────

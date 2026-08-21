@@ -171,7 +171,7 @@ public class DataInitializer implements CommandLineRunner {
                     .forcePasswordChange(false)
                     .build();
             adminRepo.save(superAdmin);
-            log.info("Super Admin created: {} / {}", SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD);
+            log.info("Super Admin account created: {}", SUPER_ADMIN_EMAIL);
         } else {
             Admin superAdmin = adminRepo.findByEmail(SUPER_ADMIN_EMAIL).get();
             boolean dirty = false;
@@ -194,7 +194,7 @@ public class DataInitializer implements CommandLineRunner {
                     .forcePasswordChange(false)
                     .build();
             adminRepo.save(testSuperAdmin);
-            log.info("Test Super Admin created: {} / {}", TEST_SUPER_ADMIN_EMAIL, TEST_SUPER_ADMIN_PASSWORD);
+            log.info("Test Super Admin account created: {}", TEST_SUPER_ADMIN_EMAIL);
         } else {
             Admin testSuperAdmin = adminRepo.findByEmail(TEST_SUPER_ADMIN_EMAIL).get();
             boolean dirty = false;
@@ -224,7 +224,7 @@ public class DataInitializer implements CommandLineRunner {
                     .forcePasswordChange(false)
                     .build();
             adminRepo.save(owner);
-            log.info("System Owner created: {} / {}", OWNER_EMAIL, OWNER_PASSWORD);
+            log.info("System Owner account created: {}", OWNER_EMAIL);
         } else {
             Admin owner = adminRepo.findByEmail(OWNER_EMAIL).get();
             boolean dirty = false;
@@ -257,7 +257,7 @@ public class DataInitializer implements CommandLineRunner {
                     .position(position)
                     .build();
             adminRepo.save(admin);
-            log.info("Position admin account created: {} / {}", email, password);
+            log.info("Position admin account created: {}", email);
         } else {
             Admin admin = adminRepo.findByEmail(email).get();
             boolean dirty = false;

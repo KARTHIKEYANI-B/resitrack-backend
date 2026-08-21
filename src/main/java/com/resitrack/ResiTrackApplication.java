@@ -11,7 +11,13 @@ import io.github.cdimascio.dotenv.Dotenv;
 @EnableScheduling
 public class ResiTrackApplication {
     public static void main(String[] args) {
-   
-            SpringApplication.run(ResiTrackApplication.class, args);
+        Dotenv dotenv = Dotenv.configure()
+                .directory("src/main/resources")
+                .ignoreIfMissing()
+                .load();
+        dotenv.entries().forEach(entry ->
+                System.setProperty(entry.getKey(), entry.getValue()));
+
+        SpringApplication.run(ResiTrackApplication.class, args);
     }
 }

@@ -40,19 +40,17 @@ public class AdminAccountController {
     private static final Set<String> SUPER_ADMIN_MANAGEABLE_POSITIONS = Set.of(
             "VICE_PRESIDENT", "SECRETARY", "JOINT_SECRETARY", "TREASURER");
 
-    // Create / delete / activate-deactivate / system-info stay Owner-exclusive
-    // (account lifecycle for the position-based model is deliberately kept in
-    // one place). List / update (name+phone) / reset-password are also open to
-    // Super Admin, scoped to the four committee-role accounts above — see
-    // requireOwnerOrSuperAdmin() + assertManageable().
+    // GET /admin/accounts — visible to Owner, SuperAdmin, and also Viewer
+    // (read-only list; Viewer cannot see this tab in the UI anyway, but
+    // if they somehow reach it the response is safe to return).
     @GetMapping
     public ResponseEntity<ApiResponse<Map<String, Object>>> listAdminAccounts(
             Authentication auth) {
 
-        Admin caller = requireOwnerOrSuperAdmin(auth);
+        Admin caller = requireOwnerSuperAdminOrViewer(auth);
 
         List<Admin> visible = adminRepo.findAll();
-        if (!caller.isSystemOwner()) {
+        if (!caller.isSystemOwner() && !caller.isViewer()) {
             // Super Admin: only the four committee-role accounts are visible
             visible = visible.stream()
                     .filter(a -> isSuperAdminManageable(a))
@@ -69,6 +67,7 @@ public class AdminAccountController {
                     m.put("position",            a.getPosition() != null ? a.getPosition().name() : null);
                     m.put("superAdmin",          a.isSuperAdmin());
                     m.put("systemOwner",         a.isSystemOwner());
+                    m.put("viewer",              a.isViewer());
                     m.put("active",              a.isActive());
                     m.put("forcePasswordChange", a.isForcePasswordChange());
                     return m;
@@ -76,19 +75,65 @@ public class AdminAccountController {
                 .collect(Collectors.toList());
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("accounts",           accounts);
-        payload.put("callerIsSuperAdmin", caller.isSuperAdmin());
+        payload.put("accounts",            accounts);
+        payload.put("callerIsSuperAdmin",  caller.isSuperAdmin());
         payload.put("callerIsSystemOwner", caller.isSystemOwner());
 
         return ResponseEntity.ok(ApiResponse.success(payload));
     }
 
-    // ── Owner-exclusive: create a new admin account ─────────────────────────
-    // Not Super-Admin-accessible — today Admin rows are otherwise only ever
-    // created implicitly via committee-position appointment
-    // (AdminAssignmentService), which stays completely unchanged. This is a
-    // genuinely new, independent way to create an account, for the Owner
-    // tier's "manage Super Admin accounts" capability.
+    // ── Owner OR SuperAdmin: create a Viewer account ────────────────────────
+    // Viewer accounts can be created by both the System Owner and Super Admin.
+    // Viewers have read-only access — every write endpoint rejects them.
+    @PostMapping("/viewer")
+    @Transactional
+    public ResponseEntity<ApiResponse<Map<String, Object>>> createViewerAccount(
+            @RequestBody Map<String, String> body,
+            Authentication auth) {
+
+        requireOwnerOrSuperAdmin(auth);  // Both Owner and SuperAdmin can create Viewers
+        rejectViewer(auth);              // A Viewer cannot create accounts
+
+        String name     = body.get("name");
+        String email    = body.get("email");
+        String password = body.get("password");
+
+        if (name == null || name.isBlank())
+            throw new CustomException("Name is required", HttpStatus.BAD_REQUEST);
+        if (email == null || email.isBlank())
+            throw new CustomException("Email is required", HttpStatus.BAD_REQUEST);
+        if (password == null || password.trim().length() < 6)
+            throw new CustomException("Password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        if (adminRepo.existsByEmail(email.trim()))
+            throw new CustomException("An account with this email already exists", HttpStatus.CONFLICT);
+
+        Admin admin = Admin.builder()
+                .name(name.trim())
+                .email(email.trim())
+                .phone(body.getOrDefault("phone", ""))
+                .password(passwordEncoder.encode(password.trim()))
+                .superAdmin(false)
+                .systemOwner(false)
+                .viewer(true)           // This is the key flag that makes it a Viewer
+                .active(true)
+                .forcePasswordChange(false)
+                .build();
+        Admin saved = adminRepo.save(admin);
+
+        log.info("Viewer account created by {} ({}): {}",
+                getCallerTier(auth), auth.getName(), saved.getEmail());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id",     saved.getId());
+        result.put("name",   saved.getName());
+        result.put("email",  saved.getEmail());
+        result.put("viewer", true);
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(
+                "Viewer account '" + saved.getEmail() + "' created", result));
+    }
+
+    // ── Owner-exclusive: create a new admin / superAdmin account ────────────
     @PostMapping
     @Transactional
     public ResponseEntity<ApiResponse<Map<String, Object>>> createAdminAccount(
@@ -117,7 +162,8 @@ public class AdminAccountController {
                 .phone(body.getOrDefault("phone", ""))
                 .password(passwordEncoder.encode(password.trim()))
                 .superAdmin(grantSuperAdmin)
-                .systemOwner(false) // Owner accounts are only ever seeded — never created via this generic endpoint
+                .systemOwner(false)
+                .viewer(false)
                 .active(true)
                 .forcePasswordChange(true)
                 .build();
@@ -136,9 +182,7 @@ public class AdminAccountController {
                 "Admin account '" + saved.getEmail() + "' created", result));
     }
 
-    // ── Owner: update name/phone/superAdmin. Super Admin: name/phone only,
-    // and only for a committee-role target (VP/Secretary/Joint Secretary/
-    // Treasurer) — see assertManageable(). ──────────────────────────────────
+    // ── Owner: update name/phone/superAdmin. Super Admin: name/phone only ───
     @PutMapping("/{adminId}")
     @Transactional
     public ResponseEntity<ApiResponse<Map<String, Object>>> updateAdminAccount(
@@ -147,20 +191,15 @@ public class AdminAccountController {
             Authentication auth) {
 
         Admin caller = requireOwnerOrSuperAdmin(auth);
+        rejectViewer(auth);
 
         Admin target = adminRepo.findById(adminId)
                 .orElseThrow(() -> new CustomException("Admin account not found", HttpStatus.NOT_FOUND));
 
         assertManageable(caller, target);
 
-        // systemOwner is intentionally not settable here — Owner accounts
-        // are only ever seeded (DataInitializer), never toggled at runtime,
-        // so this endpoint can never create a second, differently-named
-        // Owner account by accident.
         if (body.get("name") != null)       target.setName(String.valueOf(body.get("name")).trim());
         if (body.get("phone") != null)      target.setPhone(String.valueOf(body.get("phone")).trim());
-        // superAdmin can only ever be granted/revoked by the Owner — a Super
-        // Admin must never be able to elevate a committee account (or itself).
         if (caller.isSystemOwner() && body.get("superAdmin") != null)
             target.setSuperAdmin(Boolean.parseBoolean(String.valueOf(body.get("superAdmin"))));
 
@@ -178,10 +217,7 @@ public class AdminAccountController {
         return ResponseEntity.ok(ApiResponse.success("Admin account updated", result));
     }
 
-    // ── Owner-exclusive: deactivate / reactivate an admin account ──────────
-    // Login-blocking (see AuthService.buildAdminResponse) without deleting
-    // the row — lets an Owner suspend a Super Admin without losing their
-    // history/assignments the way DELETE would require revoking first.
+    // ── Owner-exclusive: deactivate / reactivate ─────────────────────────────
     @PutMapping("/{adminId}/deactivate")
     @Transactional
     public ResponseEntity<ApiResponse<Void>> deactivateAdminAccount(
@@ -216,7 +252,7 @@ public class AdminAccountController {
                 "Admin account '" + target.getEmail() + "' " + (active ? "reactivated" : "deactivated"), null));
     }
 
-    // ── Owner-exclusive: system-wide overview ───────────────────────────────
+    // ── Owner-exclusive: system-wide overview ────────────────────────────────
     @GetMapping("/system-info")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getSystemInfo(Authentication auth) {
         requireOwner(auth);
@@ -226,6 +262,7 @@ public class AdminAccountController {
         info.put("totalAdmins",      all.size());
         info.put("totalSuperAdmins", all.stream().filter(Admin::isSuperAdmin).count());
         info.put("totalOwners",      all.stream().filter(Admin::isSystemOwner).count());
+        info.put("totalViewers",     all.stream().filter(Admin::isViewer).count());
         info.put("activeAdmins",     all.stream().filter(Admin::isActive).count());
         info.put("inactiveAdmins",   all.stream().filter(a -> !a.isActive()).count());
         info.put("totalCommitteeAssignments", assignmentRepo.count());
@@ -233,8 +270,7 @@ public class AdminAccountController {
         return ResponseEntity.ok(ApiResponse.success(info));
     }
 
-    // Owner: any account. Super Admin: committee-role accounts only (see
-    // assertManageable()).
+    // Owner: any account. Super Admin: committee-role accounts only.
     @PutMapping("/{adminId}/reset-password")
     @Transactional
     public ResponseEntity<ApiResponse<Map<String, String>>> resetAdminPassword(
@@ -243,6 +279,7 @@ public class AdminAccountController {
             Authentication auth) {
 
         Admin caller = requireOwnerOrSuperAdmin(auth);
+        rejectViewer(auth);
 
         String newPassword = body.get("newPassword");
         if (newPassword == null || newPassword.trim().length() < 6)
@@ -259,15 +296,12 @@ public class AdminAccountController {
         target.setPassword(encodedPassword);
         target.setForcePasswordChange(false);
 
-        // saveAndFlush() forces immediate SQL UPDATE within the current transaction.
-        // The UPDATE is committed to the DB when the transaction closes at method end.
         Admin saved = adminRepo.saveAndFlush(target);
 
         log.info("Password reset for admin account: {} (id={}) by {} ({})",
                 saved.getEmail(), saved.getId(),
                 caller.isSystemOwner() ? "Owner" : "Super Admin", auth.getName());
 
-        // Return the email so the caller can confirm they reset the correct account.
         Map<String, String> result = new LinkedHashMap<>();
         result.put("message", "Password for '" + saved.getEmail() + "' reset successfully.");
         result.put("email",   saved.getEmail());
@@ -297,10 +331,6 @@ public class AdminAccountController {
                     "Cannot delete a Super Admin / President account. " +
                     "Transfer presidency first if needed.", HttpStatus.BAD_REQUEST);
 
-        // Owner accounts can never be deleted via this endpoint at all
-        // (same "untouchable via delete" treatment Super Admin targets
-        // already get above) — matches DataInitializer, which is the only
-        // place Owner accounts are ever created.
         if (target.isSystemOwner())
             throw new CustomException(
                     "Cannot delete a System Owner account.", HttpStatus.BAD_REQUEST);
@@ -324,10 +354,8 @@ public class AdminAccountController {
                 "Admin account '" + target.getEmail() + "' deleted", null));
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────
+    // ── helpers ───────────────────────────────────────────────────────────────
 
-    // Create / delete / activate-deactivate / system-info stay behind this —
-    // Owner-exclusive.
     private Admin requireOwner(Authentication auth) {
         Admin caller = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
@@ -338,8 +366,6 @@ public class AdminAccountController {
         return caller;
     }
 
-    // List / update / reset-password accept either tier; assertManageable()
-    // below narrows what a Super Admin caller may actually touch.
     private Admin requireOwnerOrSuperAdmin(Authentication auth) {
         Admin caller = adminRepo.findByEmail(auth.getName())
                 .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
@@ -350,6 +376,28 @@ public class AdminAccountController {
         return caller;
     }
 
+    // Read-only list endpoint — accessible by Owner, SuperAdmin, and Viewer
+    private Admin requireOwnerSuperAdminOrViewer(Authentication auth) {
+        Admin caller = adminRepo.findByEmail(auth.getName())
+                .orElseThrow(() -> new CustomException("Unauthorized", HttpStatus.FORBIDDEN));
+        if (!caller.isSystemOwner() && !caller.isSuperAdmin() && !caller.isViewer())
+            throw new CustomException(
+                    "Only the System Owner, Super Admin, or Viewer can perform this action",
+                    HttpStatus.FORBIDDEN);
+        return caller;
+    }
+
+    // Throws 403 if the caller is a Viewer — used on every write endpoint
+    // to enforce the read-only constraint at the backend layer regardless
+    // of what the frontend does or does not show.
+    private void rejectViewer(Authentication auth) {
+        Admin caller = adminRepo.findByEmail(auth.getName()).orElse(null);
+        if (caller != null && caller.isViewer())
+            throw new CustomException(
+                    "Viewer accounts are read-only and cannot perform write operations.",
+                    HttpStatus.FORBIDDEN);
+    }
+
     private boolean isSuperAdminManageable(Admin a) {
         return a.getPosition() != null
                 && SUPER_ADMIN_MANAGEABLE_POSITIONS.contains(a.getPosition().name())
@@ -357,10 +405,6 @@ public class AdminAccountController {
                 && !a.isSuperAdmin();
     }
 
-    // Owner may act on anyone. A Super Admin caller may only act on the four
-    // committee-role accounts (never on Owner or Super Admin accounts,
-    // including their own) — enforced on every mutating endpoint that also
-    // accepts Super Admin.
     private void assertManageable(Admin caller, Admin target) {
         if (caller.isSystemOwner()) return;
         if (!isSuperAdminManageable(target))
@@ -368,5 +412,13 @@ public class AdminAccountController {
                     "Super Admin can only manage Vice President, Secretary, " +
                     "Joint Secretary, and Treasurer accounts",
                     HttpStatus.FORBIDDEN);
+    }
+
+    private String getCallerTier(Authentication auth) {
+        Admin caller = adminRepo.findByEmail(auth.getName()).orElse(null);
+        if (caller == null) return "Unknown";
+        if (caller.isSystemOwner()) return "Owner";
+        if (caller.isSuperAdmin())  return "Super Admin";
+        return "Admin";
     }
 }

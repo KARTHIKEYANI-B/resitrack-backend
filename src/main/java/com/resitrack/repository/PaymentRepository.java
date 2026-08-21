@@ -112,6 +112,46 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             @Param("paymentMonth")    String paymentMonth);
 
     /**
+     * Batched version of {@link #sumPaidAmountByPropertyAndPaymentMonth} —
+     * computes the property-level (owner + linked Family Members) PAID sum
+     * for EVERY owner in a single query instead of one query per owner.
+     *
+     * Added to fix an N+1 query pattern: MaintenanceService.buildOwnerDTOs()
+     * previously called sumPaidAmountByPropertyAndPaymentMonth once per
+     * resident, and the Admin Dashboard called that (via
+     * getOwnerMaintenanceList) twice per load (current + previous month) —
+     * for M residents that's up to 2×M sequential round trips on every
+     * dashboard load, which is what made it slow to load as the resident
+     * count grew. This is the same UNION of direct + allocation-row
+     * payments as the per-owner query, just grouped by owner instead of
+     * filtered to one.
+     *
+     * Returns one row per owner who has at least one matching payment this
+     * month: [0] = owner's resident_id (Number), [1] = paid amount
+     * (Number). Owners with no payment this month simply don't appear —
+     * callers must default missing ids to zero.
+     */
+    @Query(value =
+           "SELECT COALESCE(r.owner_resident_id, r.id) AS owner_id, COALESCE(SUM(combined.amt), 0) AS total " +
+           "FROM (" +
+           "  SELECT p.resident_id AS resident_id, p.amount AS amt " +
+           "  FROM payments p " +
+           "  WHERE p.payment_status = 'PAID' " +
+           "  AND   p.payment_month  = :paymentMonth " +
+           "  AND  (p.is_multi_month = 0 OR p.is_multi_month IS NULL) " +
+           "  UNION ALL " +
+           "  SELECT p2.resident_id AS resident_id, pma.amount AS amt " +
+           "  FROM payment_month_allocations pma " +
+           "  INNER JOIN payments p2 ON p2.id = pma.payment_id " +
+           "  WHERE p2.payment_status = 'PAID' " +
+           "  AND   pma.payment_month = :paymentMonth " +
+           ") combined " +
+           "INNER JOIN residents r ON r.id = combined.resident_id " +
+           "GROUP BY COALESCE(r.owner_resident_id, r.id)",
+           nativeQuery = true)
+    List<Object[]> sumPaidAmountGroupedByOwnerForPaymentMonth(@Param("paymentMonth") String paymentMonth);
+
+    /**
      * Original single-resident paid sum — used only for user-facing queries
      * (payment history, user dashboard) where only one resident's own
      * payments are needed.

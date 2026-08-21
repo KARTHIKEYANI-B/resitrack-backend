@@ -7,6 +7,7 @@ import com.resitrack.entity.Complaint;
 import com.resitrack.entity.Resident;
 import com.resitrack.service.ComplaintService;
 import com.resitrack.service.ResidentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -20,7 +21,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ComplaintController {
 
+
     private final ComplaintService complaintService;
+    private final ViewerGuard            viewerGuard;
     private final ResidentService  residentService;
 
     @PostMapping("/user/complaints")
@@ -69,7 +72,9 @@ public class ComplaintController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<ComplaintResponseDTO>> updateStatus(
             @PathVariable Long id,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, String> body,
+            Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String newStatus  = body.get("status");
         String adminReply = body.get("adminReply");
         ComplaintResponseDTO updated = complaintService.updateStatus(id, newStatus, adminReply);

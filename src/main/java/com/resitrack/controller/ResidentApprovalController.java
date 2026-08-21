@@ -5,6 +5,7 @@ import com.resitrack.entity.Admin;
 import com.resitrack.entity.Resident;
 import com.resitrack.repository.AdminRepository;
 import com.resitrack.service.ResidentApprovalService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,6 +23,7 @@ public class ResidentApprovalController {
 
     private final ResidentApprovalService approvalService;
     private final AdminRepository         adminRepo;
+    private final ViewerGuard             viewerGuard;
 
     @GetMapping
     public ResponseEntity<ApiResponse<List<Resident>>> getAll(
@@ -38,6 +40,7 @@ public class ResidentApprovalController {
     @PutMapping("/{id}/approve")
     public ResponseEntity<ApiResponse<Resident>> approve(
             @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         Long adminId = getAdminId(auth);
         return ResponseEntity.ok(ApiResponse.success("Resident approved",
                 approvalService.approve(id, adminId)));
@@ -48,6 +51,7 @@ public class ResidentApprovalController {
             @PathVariable Long id,
             @RequestBody Map<String, String> body,
             Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         Long adminId = getAdminId(auth);
         String reason = body != null ? body.get("reason") : null;
         return ResponseEntity.ok(ApiResponse.success("Resident rejected",
@@ -57,6 +61,7 @@ public class ResidentApprovalController {
     @PutMapping("/bulk-approve")
     public ResponseEntity<ApiResponse<Map<String, Integer>>> bulkApprove(
             @RequestBody Map<String, List<Long>> body, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         Long adminId = getAdminId(auth);
         List<Long> ids = body.get("ids");
         int count = approvalService.bulkApprove(ids, adminId);
@@ -67,6 +72,7 @@ public class ResidentApprovalController {
     @PutMapping("/bulk-reject")
     public ResponseEntity<ApiResponse<Map<String, Integer>>> bulkReject(
             @RequestBody Map<String, Object> body, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         Long adminId = getAdminId(auth);
         @SuppressWarnings("unchecked")
         List<Long> ids = (List<Long>) body.get("ids");

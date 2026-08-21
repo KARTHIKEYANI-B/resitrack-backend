@@ -182,7 +182,7 @@ public class NotificationService {
                         + "! Your registration for "
                         + (r.getPropertyType() != null ? r.getPropertyType().name() + " " : "")
                         + r.getFlatNumber()
-                        + " has been approved. You can now log in to ResiTrack.")
+                        + " has been approved. You can now log in to RR Dhurya.")
                 .type(Notification.NotificationType.REGISTRATION)
                 .targetResidentId(r.getId())
                 .residentName(r.getFullName())

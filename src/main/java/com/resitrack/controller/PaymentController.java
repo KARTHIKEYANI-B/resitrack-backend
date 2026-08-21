@@ -5,6 +5,7 @@ import com.resitrack.entity.*;
 import com.resitrack.repository.*;
 import com.resitrack.service.PaymentService;
 import com.resitrack.service.ResidentService;
+import com.resitrack.util.ViewerGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -25,6 +26,7 @@ public class PaymentController {
     private final PaymentRepository     paymentRepo;
     private final ResidentRepository    residentRepo;
     private final MaintenanceRepository maintenanceRepo;
+    private final ViewerGuard           viewerGuard;
 
     @GetMapping("/admin/payments")
     @PreAuthorize("hasRole('ADMIN')")
@@ -42,6 +44,7 @@ public class PaymentController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<List<PaymentResponseDTO>>> createAdminPayment(
             @RequestBody AdminPaymentRequest req, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         List<PaymentResponseDTO> created = paymentService.registerAdminPayment(req, auth.getName());
         boolean verified = Boolean.TRUE.equals(req.getVerifiedByAdmin());
         String monthWord = created.size() == 1 ? "month" : "months";
@@ -171,6 +174,7 @@ public class PaymentController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> approvePayment(
             @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         return ResponseEntity.ok(
                 ApiResponse.success("Payment approved", paymentService.approvePayment(id, auth.getName())));
     }
@@ -179,7 +183,9 @@ public class PaymentController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PaymentResponseDTO>> rejectPayment(
             @PathVariable Long id,
-            @RequestBody(required = false) Map<String, String> body) {
+            @RequestBody(required = false) Map<String, String> body,
+            Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         String reason = body != null ? body.get("reason") : null;
         return ResponseEntity.ok(
                 ApiResponse.success("Payment rejected", paymentService.rejectPayment(id, reason)));
@@ -189,6 +195,7 @@ public class PaymentController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deletePayment(
             @PathVariable Long id, Authentication auth) {
+        viewerGuard.rejectViewer(auth);
         paymentService.deletePayment(id, auth.getName());
         return ResponseEntity.ok(ApiResponse.success("Payment record deleted", null));
     }
